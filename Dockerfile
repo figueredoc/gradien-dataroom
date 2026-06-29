@@ -69,7 +69,6 @@ middleware = middleware.replace(
 
   // Handle standard papermark.io paths`,
 `  const isAppPath =
-    path === "/" ||
     path === "/login" ||
     path === "/register" ||
     path === "/dashboard" ||
@@ -90,6 +89,21 @@ middleware = middleware.replace(
   // For custom viewer domains, route only public viewer paths through domain middleware.
   if (isCustomDomain(host || "") && !isAppPath) {
     return DomainMiddleware(req);
+  }
+
+  if (isCustomDomain(host || "") && isAppPath) {
+    const canonicalAppUrl =
+      process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL;
+    const canonicalHost = canonicalAppUrl
+      ? new URL(canonicalAppUrl).host
+      : null;
+
+    if (canonicalAppUrl && host !== canonicalHost) {
+      const url = req.nextUrl.clone();
+      url.protocol = new URL(canonicalAppUrl).protocol;
+      url.host = canonicalHost!;
+      return NextResponse.redirect(url);
+    }
   }
 
   // Handle standard app paths`
