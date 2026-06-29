@@ -13,6 +13,7 @@ WORKDIR /app
 COPY --from=source /app/package.json /app/package-lock.json ./
 COPY --from=source /app/prisma ./prisma/
 RUN npm ci --ignore-scripts
+RUN npm install nodemailer@6.10.1 --no-save --ignore-scripts
 RUN npx prisma generate
 
 FROM base AS builder
