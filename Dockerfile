@@ -582,7 +582,7 @@ export function useDocumentProgressStatus(
     text: "Processing complete",
   };
 
-  return { status, error: undefined, run: undefined };
+  return { status, error: undefined as Error | undefined, run: undefined };
 }
 `,
 );
