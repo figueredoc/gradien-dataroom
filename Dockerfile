@@ -889,28 +889,38 @@ resend = resend
   .replaceAll("Marc from Papermark <marc@papermark.io>", "Gradien Data Room <noreply@dataroom.gradien.ai>")
   .replaceAll('replyTo: marketing ? "marc@papermark.io" : replyTo,', 'replyTo: replyTo,');
 
-// Fix mupdf webpack bundling error — mupdf ships a .wasm file loaded via
-// __dirname at runtime; webpack can't resolve the self-referencing './' import
-// inside mupdf-wasm.js, so we mark it as a server-external package instead.
+// Fix mupdf webpack bundling error — mupdf-wasm.js uses a self-referencing './'
+// import that webpack can't resolve. In Next.js 14, exclude mupdf from the
+// webpack bundle via experimental.serverComponentsExternalPackages
+// (top-level serverExternalPackages was only introduced in Next.js 15).
 for (const configFile of ["next.config.js", "next.config.mjs"]) {
   if (!fs.existsSync(configFile)) continue;
   let config = fs.readFileSync(configFile, "utf8");
   if (config.includes('"mupdf"') || config.includes("'mupdf'")) break;
 
-  if (/serverExternalPackages\s*:\s*\[/.test(config)) {
+  if (/serverComponentsExternalPackages\s*:/.test(config)) {
+    // Key already present — prepend mupdf to its array
     config = config.replace(
-      /(serverExternalPackages\s*:\s*\[)/,
+      /(serverComponentsExternalPackages\s*:\s*\[)/,
       '$1"mupdf", '
     );
+  } else if (/experimental\s*:\s*\{/.test(config)) {
+    // experimental block already exists — add the key inside it
+    config = config.replace(
+      /(experimental\s*:\s*\{)/,
+      '$1\n    serverComponentsExternalPackages: ["mupdf"],'
+    );
   } else if (/const nextConfig[^=]*=\s*\{/.test(config)) {
+    // No experimental block — create one
     config = config.replace(
       /(const nextConfig[^=]*=\s*\{)/,
-      '$1\n  serverExternalPackages: ["mupdf"],'
+      '$1\n  experimental: { serverComponentsExternalPackages: ["mupdf"] },'
     );
-  } else if (/module\.exports\s*=\s*\{/.test(config)) {
+  } else {
+    // Fallback for bare export default { ... }
     config = config.replace(
-      /(module\.exports\s*=\s*\{)/,
-      '$1\n  serverExternalPackages: ["mupdf"],'
+      /(export default\s*\{)/,
+      '$1\n  experimental: { serverComponentsExternalPackages: ["mupdf"] },'
     );
   }
   fs.writeFileSync(configFile, config);
