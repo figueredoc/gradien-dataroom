@@ -342,7 +342,7 @@ async function convertPdfPage({
   const jpegBuffer = scaledPixmap.asJPEG(80, false);
   const chosenFormat = pngBuffer.byteLength < jpegBuffer.byteLength ? "png" : "jpeg";
   const chosenBuffer = chosenFormat === "png" ? pngBuffer : jpegBuffer;
-  const match = url.match(/(doc_[^\\\\/]+)\\\\//);
+  const match = url.match(/(doc_[^/]+)\\//);
   const docId = match ? match[1] : undefined;
 
   const { type, data } = await putFileServer({
