@@ -1,11 +1,9 @@
-FROM node:22-slim AS base
-RUN apt-get update && apt-get install -y openssl ca-certificates git && rm -rf /var/lib/apt/lists/*
-
-FROM base AS source
-WORKDIR /app
-ARG PAPERMARK_VERSION=main
+FROM node:24-slim AS base
+...
+ARG PAPERMARK_VERSION=v0.21.0
 RUN git clone --depth 1 --branch ${PAPERMARK_VERSION} https://github.com/mfts/papermark.git . \
-    && sed -i 's/host?.endsWith(".vercel.app")/host?.endsWith(".vercel.app") || host?.endsWith(".railway.app")/' middleware.ts
+    && sed -i 's/host?.endsWith(".vercel.app")/host?.endsWith(".vercel.app") || host?.endsWith(".railway.app")/' middleware.ts \
+    && sed -i 's/secret: process.env.NEXTAUTH_SECRET,/secret: process.env.NEXTAUTH_SECRET, cookieName: "next-auth.session-token",/' lib/middleware/app.ts
 
 FROM base AS deps
 WORKDIR /app
