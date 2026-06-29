@@ -231,6 +231,29 @@ getFile = getFile.replace(
 );
 fs.writeFileSync(getFilePath, getFile);
 
+const triggerStatusPath = "lib/utils/generate-trigger-status.ts";
+let triggerStatus = fs.readFileSync(triggerStatusPath, "utf8");
+triggerStatus = triggerStatus.replace(
+`export function updateStatus(status: TDocumentProgressStatus) {
+  // \`metadata.set\` can be used to update the status of the task
+  // as long as \`updateStatus\` is called within the task's \`run\` function.
+  metadata.set("status", status);
+}`,
+`export function updateStatus(status: TDocumentProgressStatus) {
+  try {
+    metadata.set("status", status);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message !== "Method not implemented."
+    ) {
+      throw error;
+    }
+  }
+}`,
+);
+fs.writeFileSync(triggerStatusPath, triggerStatus);
+
 const pdfRoutePath = "lib/trigger/pdf-to-image-route.ts";
 let pdfRoute = fs.readFileSync(pdfRoutePath, "utf8");
 pdfRoute = pdfRoute.replace(
