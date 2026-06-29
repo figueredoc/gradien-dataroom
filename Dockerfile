@@ -197,7 +197,6 @@ putFile = putFile.replaceAll(
 );
 
 for (const filePath of [
-  "lib/files/get-file.ts",
   "lib/files/tus-upload.ts",
   "lib/files/viewer-tus-upload.ts",
 ]) {
@@ -209,6 +208,14 @@ for (const filePath of [
     .replaceAll("${process.env.NEXT_PUBLIC_BASE_URL}/api/file/tus", "/api/file/tus");
   fs.writeFileSync(filePath, file);
 }
+
+const getFilePath = "lib/files/get-file.ts";
+let getFile = fs.readFileSync(getFilePath, "utf8");
+getFile = getFile.replace(
+  "`${process.env.NEXT_PUBLIC_BASE_URL}/api/file/s3/get-presigned-get-url`,",
+  "`${process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL}/api/file/s3/get-presigned-get-url`,",
+);
+fs.writeFileSync(getFilePath, getFile);
 
 const runtimeAppUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL)";
 const runtimeMarketingUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_MARKETING_URL || process.env.NEXT_PUBLIC_BASE_URL)";
