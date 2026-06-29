@@ -100,6 +100,18 @@ utils = utils.replace(
   return blob.url;
 };`
 );
+
+const resendPath = "lib/resend.ts";
+let resend = fs.readFileSync(resendPath, "utf8");
+resend = resend
+  .replaceAll("Marc from Papermark <marc@ship.papermark.io>", "Gradien Data Room <noreply@dataroom.gradien.ai>")
+  .replaceAll("Papermark <system@papermark.io>", "Gradien Data Room <noreply@dataroom.gradien.ai>")
+  .replaceAll("Papermark <system@verify.papermark.io>", "Gradien Data Room <noreply@dataroom.gradien.ai>")
+  .replaceAll("Marc Seitz <marc@papermark.io>", "Gradien Data Room <noreply@dataroom.gradien.ai>")
+  .replaceAll("Marc from Papermark <marc@papermark.io>", "Gradien Data Room <noreply@dataroom.gradien.ai>")
+  .replaceAll('replyTo: marketing ? "marc@papermark.io" : replyTo,', 'replyTo: replyTo,');
+
+fs.writeFileSync(resendPath, resend);
 fs.writeFileSync(utilsPath, utils);
 NODE
 
