@@ -889,6 +889,34 @@ resend = resend
   .replaceAll("Marc from Papermark <marc@papermark.io>", "Gradien Data Room <noreply@dataroom.gradien.ai>")
   .replaceAll('replyTo: marketing ? "marc@papermark.io" : replyTo,', 'replyTo: replyTo,');
 
+// Fix mupdf webpack bundling error — mupdf ships a .wasm file loaded via
+// __dirname at runtime; webpack can't resolve the self-referencing './' import
+// inside mupdf-wasm.js, so we mark it as a server-external package instead.
+for (const configFile of ["next.config.js", "next.config.mjs"]) {
+  if (!fs.existsSync(configFile)) continue;
+  let config = fs.readFileSync(configFile, "utf8");
+  if (config.includes('"mupdf"') || config.includes("'mupdf'")) break;
+
+  if (/serverExternalPackages\s*:\s*\[/.test(config)) {
+    config = config.replace(
+      /(serverExternalPackages\s*:\s*\[)/,
+      '$1"mupdf", '
+    );
+  } else if (/const nextConfig[^=]*=\s*\{/.test(config)) {
+    config = config.replace(
+      /(const nextConfig[^=]*=\s*\{)/,
+      '$1\n  serverExternalPackages: ["mupdf"],'
+    );
+  } else if (/module\.exports\s*=\s*\{/.test(config)) {
+    config = config.replace(
+      /(module\.exports\s*=\s*\{)/,
+      '$1\n  serverExternalPackages: ["mupdf"],'
+    );
+  }
+  fs.writeFileSync(configFile, config);
+  break;
+}
+
 fs.writeFileSync(putFilePath, putFile);
 fs.writeFileSync(resendPath, resend);
 fs.writeFileSync(utilsPath, utils);
