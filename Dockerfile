@@ -257,6 +257,140 @@ fs.writeFileSync(triggerStatusPath, triggerStatus);
 const pdfRoutePath = "lib/trigger/pdf-to-image-route.ts";
 let pdfRoute = fs.readFileSync(pdfRoutePath, "utf8");
 pdfRoute = pdfRoute.replace(
+`import { logger, task } from "@trigger.dev/sdk/v3";
+
+import { getFile } from "@/lib/files/get-file";`,
+`import { logger, task } from "@trigger.dev/sdk/v3";
+import * as mupdf from "mupdf";
+
+import { getFile } from "@/lib/files/get-file";
+import { putFileServer } from "@/lib/files/put-file-server";`,
+);
+pdfRoute = pdfRoute.replace(
+`type ConvertPdfToImagePayload = {
+  documentId: string;
+  documentVersionId: string;
+  teamId: string;
+  versionNumber?: number;
+};`,
+`type ConvertPdfToImagePayload = {
+  documentId: string;
+  documentVersionId: string;
+  teamId: string;
+  versionNumber?: number;
+};
+
+async function getPdfData(url: string) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error("Failed to fetch PDF");
+  }
+  return response.arrayBuffer();
+}
+
+function getPdfPages(pdfData: ArrayBuffer) {
+  const doc = new mupdf.PDFDocument(pdfData);
+  return doc.countPages();
+}
+
+async function convertPdfPage({
+  documentVersionId,
+  pageNumber,
+  url,
+  teamId,
+}: {
+  documentVersionId: string;
+  pageNumber: number;
+  url: string;
+  teamId: string;
+}) {
+  const pdfData = await getPdfData(url);
+  const doc = new mupdf.PDFDocument(pdfData);
+  const page = doc.loadPage(pageNumber - 1);
+  const bounds = page.getBounds();
+  const [ulx, uly, lrx, lry] = bounds;
+  const widthInPoints = Math.abs(lrx - ulx);
+  const heightInPoints = Math.abs(lry - uly);
+
+  if (pageNumber === 1) {
+    await prisma.documentVersion.update({
+      where: { id: documentVersionId },
+      data: { isVertical: heightInPoints > widthInPoints },
+    });
+  }
+
+  const scaleFactor = widthInPoints >= 1600 ? 2 : 3;
+  const docToScreen = mupdf.Matrix.scale(scaleFactor, scaleFactor);
+  const links = page.getLinks();
+  const embeddedLinks = links.map((link) => {
+    return { href: link.getURI(), coords: link.getBounds().join(",") };
+  });
+  const metadata = {
+    originalWidth: widthInPoints,
+    originalHeight: heightInPoints,
+    width: widthInPoints * scaleFactor,
+    height: heightInPoints * scaleFactor,
+    scaleFactor,
+  };
+
+  const scaledPixmap = page.toPixmap(
+    docToScreen,
+    mupdf.ColorSpace.DeviceRGB,
+    false,
+    true,
+  );
+  const pngBuffer = scaledPixmap.asPNG();
+  const jpegBuffer = scaledPixmap.asJPEG(80, false);
+  const chosenFormat = pngBuffer.byteLength < jpegBuffer.byteLength ? "png" : "jpeg";
+  const chosenBuffer = chosenFormat === "png" ? pngBuffer : jpegBuffer;
+  const match = url.match(/(doc_[^\\/]+)\\//);
+  const docId = match ? match[1] : undefined;
+
+  const { type, data } = await putFileServer({
+    file: {
+      name: "page-" + pageNumber + "." + chosenFormat,
+      type: "image/" + chosenFormat,
+      buffer: Buffer.from(chosenBuffer),
+    },
+    teamId,
+    docId,
+  });
+
+  scaledPixmap.destroy();
+  page.destroy();
+
+  if (!data || !type) {
+    throw new Error("Failed to upload document page " + pageNumber);
+  }
+
+  const existingPage = await prisma.documentPage.findUnique({
+    where: {
+      pageNumber_versionId: {
+        pageNumber,
+        versionId: documentVersionId,
+      },
+    },
+  });
+
+  if (existingPage) {
+    return existingPage.id;
+  }
+
+  const documentPage = await prisma.documentPage.create({
+    data: {
+      versionId: documentVersionId,
+      pageNumber,
+      file: data,
+      storageType: type,
+      pageLinks: embeddedLinks,
+      metadata,
+    },
+  });
+
+  return documentPage.id;
+}`,
+);
+pdfRoute = pdfRoute.replace(
   `export const convertPdfToImageRoute = task({
   id: "convert-pdf-to-image-route",
   run: async (payload: ConvertPdfToImagePayload) => {`,
@@ -265,6 +399,78 @@ pdfRoute = pdfRoute.replace(
 pdfRoute = pdfRoute.replace(
   /\n  },\n}\);\s*$/,
   `\n};\n\nexport const convertPdfToImageRoute = task({\n  id: "convert-pdf-to-image-route",\n  run: convertPdfToImage,\n});\n`,
+);
+fs.writeFileSync(pdfRoutePath, pdfRoute);
+
+pdfRoute = fs.readFileSync(pdfRoutePath, "utf8");
+pdfRoute = pdfRoute.replace(
+`      // 3. send file to api/convert endpoint in a task and get back number of pages
+      logger.info("Sending file to api/get-pages endpoint");
+
+      const response = await fetch(
+        \`\${process.env.NEXT_PUBLIC_BASE_URL}/api/mupdf/get-pages\`,
+        {
+          method: "POST",
+          body: JSON.stringify({ url: signedUrl }),
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: \`Bearer \${process.env.INTERNAL_API_KEY}\`,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        logger.error("Failed to get number of pages", {
+          signedUrl,
+          response,
+        });
+        throw new Error("Failed to get number of pages");
+      }
+
+      const { numPages: numPagesResult } = (await response.json()) as {
+        numPages: number;
+      };
+`,
+`      logger.info("Counting PDF pages inline");
+
+      const pdfData = await getPdfData(signedUrl);
+      const numPagesResult = getPdfPages(pdfData);
+`,
+);
+pdfRoute = pdfRoute.replace(
+`        // send page number to api/convert-page endpoint in a task and get back page img url
+        const response = await fetch(
+          \`\${process.env.NEXT_PUBLIC_BASE_URL}/api/mupdf/convert-page\`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              documentVersionId: documentVersionId,
+              pageNumber: currentPage,
+              url: signedUrl,
+              teamId: teamId,
+            }),
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: \`Bearer \${process.env.INTERNAL_API_KEY}\`,
+            },
+          },
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to convert page");
+        }
+
+        const { documentPageId } = (await response.json()) as {
+          documentPageId: string;
+        };
+`,
+`        const documentPageId = await convertPdfPage({
+          documentVersionId: documentVersionId,
+          pageNumber: currentPage,
+          url: signedUrl,
+          teamId: teamId,
+        });
+`,
 );
 fs.writeFileSync(pdfRoutePath, pdfRoute);
 
