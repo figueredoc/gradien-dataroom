@@ -53,6 +53,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const blob = await put(filename, body, {
       access: "public",
       addRandomSuffix: true,
+      token:
+        process.env.NEXT_PRIVATE_BRANDING_BLOB_READ_WRITE_TOKEN ||
+        process.env.BLOB_READ_WRITE_TOKEN,
     });
 
     return res.status(200).json({ url: blob.url });
