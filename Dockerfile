@@ -51,6 +51,39 @@ middleware = middleware.replace(
   );
 }`
 );
+middleware = middleware.replace(
+`  // For custom domains, we need to handle them differently
+  if (isCustomDomain(host || "")) {
+    return DomainMiddleware(req);
+  }
+
+  // Handle standard papermark.io paths`,
+`  const isAppPath =
+    path === "/" ||
+    path === "/login" ||
+    path === "/register" ||
+    path === "/dashboard" ||
+    path === "/branding" ||
+    path === "/welcome" ||
+    path === "/account" ||
+    path === "/unsubscribe" ||
+    path.startsWith("/auth/") ||
+    path.startsWith("/verify") ||
+    path.startsWith("/settings") ||
+    path.startsWith("/documents") ||
+    path.startsWith("/datarooms") ||
+    path.startsWith("/links") ||
+    path.startsWith("/people") ||
+    path.startsWith("/teams") ||
+    path.startsWith("/conversations");
+
+  // For custom viewer domains, route only public viewer paths through domain middleware.
+  if (isCustomDomain(host || "") && !isAppPath) {
+    return DomainMiddleware(req);
+  }
+
+  // Handle standard app paths`
+);
 fs.writeFileSync(middlewarePath, middleware);
 
 fs.writeFileSync("pages/api/file/image-upload-server.ts", `
