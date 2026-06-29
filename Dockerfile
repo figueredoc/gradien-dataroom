@@ -752,6 +752,18 @@ for (const filePath of [
   ]);
 }
 
+// Fix TS type error: `team` is typed as T | null but accessed without a null check.
+// The trigger blocks are already guarded by `if (false)` so this is safe at runtime;
+// the non-null assertion just satisfies the type checker.
+replaceAllInFile("ee/features/conversations/api/conversations-route.ts", [
+  ["teamId: team.id,", "teamId: team!.id,"],
+  ["${team.id}-", "${team!.id}-"],
+]);
+replaceAllInFile("ee/features/conversations/api/team-conversations-route.ts", [
+  ["teamId: team.id,", "teamId: team!.id,"],
+  ["${team.id}-", "${team!.id}-"],
+]);
+
 fs.writeFileSync("trigger.config.ts", `
 export default {};
 `);
