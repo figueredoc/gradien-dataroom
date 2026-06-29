@@ -165,6 +165,31 @@ for (const filePath of [
   fs.writeFileSync(filePath, file);
 }
 
+const awsClientPath = "lib/files/aws-client.ts";
+let awsClient = fs.readFileSync(awsClientPath, "utf8");
+awsClient = awsClient.replaceAll(
+  "endpoint: config.endpoint || undefined,\n    region: config.region,",
+  "endpoint: config.endpoint || undefined,\n    forcePathStyle: Boolean(config.endpoint),\n    region: config.region,",
+);
+fs.writeFileSync(awsClientPath, awsClient);
+
+const s3StorePath = "ee/features/storage/s3-store.ts";
+let s3Store = fs.readFileSync(s3StorePath, "utf8");
+s3Store = s3Store
+  .replace(
+    "const superS3Config: any = {\n      bucket: euConfig.bucket,\n      region: euConfig.region,",
+    "const superS3Config: any = {\n      bucket: euConfig.bucket,\n      endpoint: euConfig.endpoint || undefined,\n      forcePathStyle: Boolean(euConfig.endpoint),\n      region: euConfig.region,",
+  )
+  .replace(
+    "const euS3Config: any = {\n      bucket: euConfig.bucket,\n      region: euConfig.region,",
+    "const euS3Config: any = {\n      bucket: euConfig.bucket,\n      endpoint: euConfig.endpoint || undefined,\n      forcePathStyle: Boolean(euConfig.endpoint),\n      region: euConfig.region,",
+  )
+  .replace(
+    "const usS3Config: any = {\n        bucket: this.usConfig.bucket,\n        region: this.usConfig.region,",
+    "const usS3Config: any = {\n        bucket: this.usConfig.bucket,\n        endpoint: this.usConfig.endpoint || undefined,\n        forcePathStyle: Boolean(this.usConfig.endpoint),\n        region: this.usConfig.region,",
+  );
+fs.writeFileSync(s3StorePath, s3Store);
+
 const resendPath = "lib/resend.ts";
 let resend = fs.readFileSync(resendPath, "utf8");
 resend = resend
