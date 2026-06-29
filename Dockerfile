@@ -104,6 +104,13 @@ utils = utils.replace(
 };`
 );
 
+const putFilePath = "lib/files/put-file.ts";
+let putFile = fs.readFileSync(putFilePath, "utf8");
+putFile = putFile.replaceAll(
+  "${process.env.NEXT_PUBLIC_BASE_URL}/api/file/s3/",
+  "/api/file/s3/",
+);
+
 const resendPath = "lib/resend.ts";
 let resend = fs.readFileSync(resendPath, "utf8");
 resend = resend
@@ -114,6 +121,7 @@ resend = resend
   .replaceAll("Marc from Papermark <marc@papermark.io>", "Gradien Data Room <noreply@dataroom.gradien.ai>")
   .replaceAll('replyTo: marketing ? "marc@papermark.io" : replyTo,', 'replyTo: replyTo,');
 
+fs.writeFileSync(putFilePath, putFile);
 fs.writeFileSync(resendPath, resend);
 fs.writeFileSync(utilsPath, utils);
 NODE
