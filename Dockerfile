@@ -217,6 +217,38 @@ getFile = getFile.replace(
 );
 fs.writeFileSync(getFilePath, getFile);
 
+const pdfRoutePath = "lib/trigger/pdf-to-image-route.ts";
+let pdfRoute = fs.readFileSync(pdfRoutePath, "utf8");
+pdfRoute = pdfRoute.replace(
+  `export const convertPdfToImageRoute = task({
+  id: "convert-pdf-to-image-route",
+  run: async (payload: ConvertPdfToImagePayload) => {`,
+  `export const convertPdfToImage = async (payload: ConvertPdfToImagePayload) => {`,
+);
+pdfRoute = pdfRoute.replace(
+  /\n  },\n}\);\s*$/,
+  `\n};\n\nexport const convertPdfToImageRoute = task({\n  id: "convert-pdf-to-image-route",\n  run: convertPdfToImage,\n});\n`,
+);
+fs.writeFileSync(pdfRoutePath, pdfRoute);
+
+function inlinePdfTrigger(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  let file = fs.readFileSync(filePath, "utf8");
+  file = file.replace(
+    'import { convertPdfToImageRoute } from "@/lib/trigger/pdf-to-image-route";',
+    'import { convertPdfToImage } from "@/lib/trigger/pdf-to-image-route";',
+  );
+  file = file.replace(
+    /await convertPdfToImageRoute\.trigger\(\s*(\{[\s\S]*?\})\s*,\s*\{[\s\S]*?concurrencyKey: teamId,\s*\},\s*\);/g,
+    "await convertPdfToImage($1);",
+  );
+  fs.writeFileSync(filePath, file);
+}
+
+inlinePdfTrigger("lib/api/documents/process-document.ts");
+inlinePdfTrigger("pages/api/teams/[teamId]/documents/[id]/versions/index.ts");
+inlinePdfTrigger("pages/api/teams/[teamId]/documents/agreement.ts");
+
 const runtimeAppUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL)";
 const runtimeMarketingUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_MARKETING_URL || process.env.NEXT_PUBLIC_BASE_URL)";
 
