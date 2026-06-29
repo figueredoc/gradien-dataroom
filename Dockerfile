@@ -7,7 +7,6 @@ ARG PAPERMARK_VERSION=v0.21.0
 RUN git clone --depth 1 --branch ${PAPERMARK_VERSION} https://github.com/mfts/papermark.git . \
     && sed -i 's/host?.endsWith(".vercel.app")/host?.endsWith(".vercel.app") || host?.endsWith(".railway.app")/' middleware.ts \
     && sed -i 's/secret: process.env.NEXTAUTH_SECRET,/secret: process.env.NEXTAUTH_SECRET, cookieName: "next-auth.session-token",/' lib/middleware/app.ts
-    && sed -i 's|const isInvited = url.searchParams.has("invitation");|if (path === "/") { return NextResponse.redirect(new URL("/login", req.url)); }\n  const isInvited = url.searchParams.has("invitation");|' lib/middleware/app.ts
 
 FROM base AS deps
 WORKDIR /app
