@@ -232,27 +232,25 @@ getFile = getFile.replace(
 fs.writeFileSync(getFilePath, getFile);
 
 const triggerStatusPath = "lib/utils/generate-trigger-status.ts";
-let triggerStatus = fs.readFileSync(triggerStatusPath, "utf8");
-triggerStatus = triggerStatus.replace(
-`export function updateStatus(status: TDocumentProgressStatus) {
-  // \`metadata.set\` can be used to update the status of the task
-  // as long as \`updateStatus\` is called within the task's \`run\` function.
-  metadata.set("status", status);
-}`,
-`export function updateStatus(status: TDocumentProgressStatus) {
-  try {
-    metadata.set("status", status);
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message !== "Method not implemented."
-    ) {
-      throw error;
-    }
-  }
-}`,
-);
-fs.writeFileSync(triggerStatusPath, triggerStatus);
+fs.writeFileSync(triggerStatusPath, `import { z } from "zod";
+
+const ZDocumentProgressStatus = z.object({
+  progress: z.number(),
+  text: z.string(),
+});
+
+type TDocumentProgressStatus = z.infer<typeof ZDocumentProgressStatus>;
+
+const ZDocumentProgressMetadata = z.object({
+  status: ZDocumentProgressStatus,
+});
+
+export function updateStatus(_status: TDocumentProgressStatus) {}
+
+export function parseStatus(data: unknown): TDocumentProgressStatus {
+  return ZDocumentProgressMetadata.parse(data).status;
+}
+`);
 
 const pdfRoutePath = "lib/trigger/pdf-to-image-route.ts";
 let pdfRoute = fs.readFileSync(pdfRoutePath, "utf8");
@@ -260,8 +258,9 @@ pdfRoute = pdfRoute.replace(
 `import { logger, task } from "@trigger.dev/sdk/v3";
 
 import { getFile } from "@/lib/files/get-file";`,
-`import { logger, task } from "@trigger.dev/sdk/v3";
-import * as mupdf from "mupdf";
+`import * as mupdf from "mupdf";
+
+const logger = { info: console.log, error: console.error };
 
 import { getFile } from "@/lib/files/get-file";
 import { putFileServer } from "@/lib/files/put-file-server";`,
@@ -343,7 +342,7 @@ async function convertPdfPage({
   const jpegBuffer = scaledPixmap.asJPEG(80, false);
   const chosenFormat = pngBuffer.byteLength < jpegBuffer.byteLength ? "png" : "jpeg";
   const chosenBuffer = chosenFormat === "png" ? pngBuffer : jpegBuffer;
-  const match = url.match(/(doc_[^\\/]+)\\//);
+  const match = url.match(/(doc_[^\\\\/]+)\\\\//);
   const docId = match ? match[1] : undefined;
 
   const { type, data } = await putFileServer({
@@ -398,7 +397,7 @@ pdfRoute = pdfRoute.replace(
 );
 pdfRoute = pdfRoute.replace(
   /\n  },\n}\);\s*$/,
-  `\n};\n\nexport const convertPdfToImageRoute = task({\n  id: "convert-pdf-to-image-route",\n  run: convertPdfToImage,\n});\n`,
+  `\n};\n\nexport const convertPdfToImageRoute = {\n  trigger: async (payload: ConvertPdfToImagePayload) => convertPdfToImage(payload),\n};\n`,
 );
 fs.writeFileSync(pdfRoutePath, pdfRoute);
 
@@ -491,6 +490,329 @@ function inlinePdfTrigger(filePath) {
 inlinePdfTrigger("lib/api/documents/process-document.ts");
 inlinePdfTrigger("pages/api/teams/[teamId]/documents/[id]/versions/index.ts");
 inlinePdfTrigger("pages/api/teams/[teamId]/documents/agreement.ts");
+
+function disableDocumentWorkerImports(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  let file = fs.readFileSync(filePath, "utf8");
+  file = file
+    .replace(
+      'import { convertCadToPdfTask } from "@/lib/trigger/convert-files";',
+      'const convertCadToPdfTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+    )
+    .replace(
+      'import { convertFilesToPdfTask } from "@/lib/trigger/convert-files";',
+      'const convertFilesToPdfTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+    )
+    .replace(
+      'import { processVideo } from "@/lib/trigger/optimize-video-files";',
+      'const processVideo = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+    );
+  fs.writeFileSync(filePath, file);
+}
+
+for (const filePath of [
+  "lib/api/documents/process-document.ts",
+  "pages/api/teams/[teamId]/documents/[id]/versions/index.ts",
+  "pages/api/teams/[teamId]/documents/agreement.ts",
+]) {
+  disableDocumentWorkerImports(filePath);
+}
+
+function replaceInFile(filePath, replacements) {
+  if (!fs.existsSync(filePath)) return;
+  let file = fs.readFileSync(filePath, "utf8");
+  for (const [search, replacement] of replacements) {
+    file = file.replace(search, replacement);
+  }
+  fs.writeFileSync(filePath, file);
+}
+
+function replaceAllInFile(filePath, replacements) {
+  if (!fs.existsSync(filePath)) return;
+  let file = fs.readFileSync(filePath, "utf8");
+  for (const [search, replacement] of replacements) {
+    file = file.replaceAll(search, replacement);
+  }
+  fs.writeFileSync(filePath, file);
+}
+
+fs.writeFileSync(
+  "pages/api/progress-token.ts",
+  `import { NextApiRequest, NextApiResponse } from "next";
+
+export default async function handle(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  return res.status(200).json({ publicAccessToken: "" });
+}
+`,
+);
+
+fs.writeFileSync(
+  "lib/utils/use-progress-status.ts",
+  `"use client";
+
+type RunStatus =
+  | "QUEUED"
+  | "EXECUTING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CRASHED"
+  | "CANCELED"
+  | "SYSTEM_FAILURE";
+
+interface IDocumentProgressStatus {
+  state: RunStatus;
+  progress: number;
+  text: string;
+}
+
+export function useDocumentProgressStatus(
+  _documentVersionId: string,
+  _publicAccessToken: string | undefined,
+) {
+  const status: IDocumentProgressStatus = {
+    state: "COMPLETED",
+    progress: 100,
+    text: "Processing complete",
+  };
+
+  return { status, error: undefined, run: undefined };
+}
+`,
+);
+
+for (const filePath of [
+  "components/documents/document-preview-button.tsx",
+  "components/links/links-table.tsx",
+]) {
+  replaceAllInFile(filePath, [
+    ['["pdf", "slides", "docs", "cad"]', '["pdf"]'],
+  ]);
+}
+
+replaceInFile("lib/api/documents/process-document.ts", [
+  ['if (type === "docs" || type === "slides") {', 'if (false && (type === "docs" || type === "slides")) {'],
+  ['if (type === "cad") {', 'if (false && type === "cad") {'],
+  ['if (type === "video" && contentType !== "video/mp4") {', 'if (false && type === "video" && contentType !== "video/mp4") {'],
+]);
+
+replaceInFile("pages/api/teams/[teamId]/documents/[id]/versions/index.ts", [
+  ['if (type === "docs" || type === "slides") {', 'if (false && (type === "docs" || type === "slides")) {'],
+  ['if (type === "video" && contentType !== "video/mp4") {', 'if (false && type === "video" && contentType !== "video/mp4") {'],
+]);
+
+replaceInFile("pages/api/teams/[teamId]/documents/agreement.ts", [
+  ['if (type === "docs") {', 'if (false && type === "docs") {'],
+]);
+
+const exportVisitsPath = "lib/trigger/export-visits.ts";
+let exportVisits = fs.readFileSync(exportVisitsPath, "utf8");
+exportVisits = exportVisits.replace(
+  'import { logger, task } from "@trigger.dev/sdk/v3";',
+  'const logger = { info: console.log, error: console.error };',
+);
+exportVisits = exportVisits.replace(
+`export const exportVisitsTask = task({
+  id: "export-visits",
+  retry: { maxAttempts: 3 },
+  maxDuration: 900, // 15 minutes to handle large datasets
+  run: async (payload: ExportVisitsPayload) => {`,
+`export const runExportVisits = async (payload: ExportVisitsPayload) => {`,
+);
+exportVisits = exportVisits.replace(
+`
+  },
+});
+
+async function exportDocumentVisits`,
+`
+};
+
+export const exportVisitsTask = {
+  trigger: async (payload: ExportVisitsPayload) => runExportVisits(payload),
+};
+
+async function exportDocumentVisits`,
+);
+fs.writeFileSync(exportVisitsPath, exportVisits);
+
+function inlineExportVisits(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  let file = fs.readFileSync(filePath, "utf8");
+  file = file.replace(
+    'import { exportVisitsTask } from "@/lib/trigger/export-visits";',
+    'import { runExportVisits } from "@/lib/trigger/export-visits";',
+  );
+  file = file.replace(
+    /\/\/ Trigger the background task\s*const handle = await exportVisitsTask\.trigger\(\s*(\{[\s\S]*?\})\s*,\s*\{[\s\S]*?\}\s*,?\s*\);\s*\/\/ Update the job with the trigger run ID for cancellation\s*const updatedJob = await jobStore\.updateJob\(exportJob\.id,\s*\{\s*triggerRunId: handle\.id,\s*\}\s*\);/g,
+    "await runExportVisits($1);\n\n    const updatedJob = await jobStore.getJob(exportJob.id);",
+  );
+  fs.writeFileSync(filePath, file);
+}
+
+for (const filePath of [
+  "pages/api/teams/[teamId]/export-jobs.ts",
+  "pages/api/teams/[teamId]/documents/[id]/export-visits.ts",
+  "pages/api/teams/[teamId]/datarooms/[id]/export-visits.ts",
+  "pages/api/teams/[teamId]/datarooms/[id]/groups/[groupId]/export-visits.ts",
+]) {
+  inlineExportVisits(filePath);
+}
+
+function disableTriggerRuns(filePath) {
+  replaceInFile(filePath, [
+    [
+      'import { runs } from "@trigger.dev/sdk/v3";',
+      'const runs = { list: async (..._args: unknown[]): Promise<{ data: Array<{ id: string }> }> => ({ data: [] }), cancel: async (_id: string) => undefined };',
+    ],
+  ]);
+}
+
+for (const filePath of [
+  "pages/api/teams/[teamId]/datarooms/[id]/documents/index.ts",
+  "pages/api/teams/[teamId]/export-jobs/[exportId].ts",
+  "ee/features/billing/cancellation/api/unpause-route.ts",
+  "ee/features/conversations/api/conversations-route.ts",
+  "ee/features/conversations/api/team-conversations-route.ts",
+]) {
+  disableTriggerRuns(filePath);
+}
+
+replaceInFile("pages/api/teams/[teamId]/datarooms/[id]/documents/index.ts", [
+  [
+    'import { sendDataroomChangeNotificationTask } from "@/lib/trigger/dataroom-change-notification";',
+    'const sendDataroomChangeNotificationTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+  ],
+]);
+
+replaceInFile("pages/api/teams/[teamId]/datarooms/trial.ts", [
+  [
+    'import {\n  sendDataroomTrialExpiredEmailTask,\n  sendDataroomTrialInfoEmailTask,\n} from "@/lib/trigger/send-scheduled-email";',
+    'const sendDataroomTrialExpiredEmailTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };\nconst sendDataroomTrialInfoEmailTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+  ],
+]);
+
+replaceInFile("ee/features/billing/cancellation/api/pause-route.ts", [
+  [
+    'import { sendPauseResumeNotificationTask } from "../lib/trigger/pause-resume-notification";',
+    'const sendPauseResumeNotificationTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+  ],
+  [
+    'import { sendPauseResumeNotificationTask } from "@/ee/features/billing/cancellation/lib/trigger/pause-resume-notification";',
+    'const sendPauseResumeNotificationTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+  ],
+]);
+
+for (const filePath of [
+  "ee/features/conversations/api/conversations-route.ts",
+  "ee/features/conversations/api/team-conversations-route.ts",
+]) {
+  replaceInFile(filePath, [
+    [
+      'import { sendConversationTeamMemberNotificationTask } from "../lib/trigger/conversation-message-notification";',
+      'const sendConversationTeamMemberNotificationTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+    ],
+    [
+      'import { sendConversationMessageNotificationTask } from "../lib/trigger/conversation-message-notification";',
+      'const sendConversationMessageNotificationTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+    ],
+    [
+      'import { sendConversationMessageNotificationTask } from "@/lib/trigger/conversation-message-notification";',
+      'const sendConversationMessageNotificationTask = { trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }) };',
+    ],
+  ]);
+}
+
+replaceInFile("pages/api/teams/[teamId]/datarooms/[id]/documents/index.ts", [
+  ["if (document.dataroom.enableChangeNotifications) {", "if (false && document.dataroom.enableChangeNotifications) {"],
+]);
+
+replaceInFile("pages/api/teams/[teamId]/datarooms/trial.ts", [
+  ["waitUntil(\n        sendDataroomTrialInfoEmailTask.trigger(", "if (false) waitUntil(\n        sendDataroomTrialInfoEmailTask.trigger("],
+  ["waitUntil(\n        sendDataroomTrialExpiredEmailTask.trigger(", "if (false) waitUntil(\n        sendDataroomTrialExpiredEmailTask.trigger("],
+]);
+
+replaceInFile("ee/features/billing/cancellation/api/pause-route.ts", [
+  ["sendPauseResumeNotificationTask.trigger(", "false && sendPauseResumeNotificationTask.trigger("],
+]);
+
+for (const filePath of [
+  "ee/features/conversations/api/conversations-route.ts",
+  "ee/features/conversations/api/team-conversations-route.ts",
+]) {
+  replaceAllInFile(filePath, [
+    ["waitUntil(\n      sendConversationTeamMemberNotificationTask.trigger(", "if (false) waitUntil(\n      sendConversationTeamMemberNotificationTask.trigger("],
+    ["waitUntil(\n        sendConversationMessageNotificationTask.trigger(", "if (false) waitUntil(\n        sendConversationMessageNotificationTask.trigger("],
+  ]);
+}
+
+fs.writeFileSync("trigger.config.ts", `
+export default {};
+`);
+
+fs.writeFileSync("lib/utils/generate-trigger-auth-token.ts", `
+export const generateTriggerAuthToken = async () => "";
+`);
+
+fs.writeFileSync("lib/trigger/convert-files.ts", `
+export const convertFilesToPdfTask = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+
+export const convertCadToPdfTask = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+`);
+
+fs.writeFileSync("lib/trigger/optimize-video-files.ts", `
+export const processVideo = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+`);
+
+fs.writeFileSync("lib/trigger/dataroom-change-notification.ts", `
+export const sendDataroomChangeNotificationTask = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+`);
+
+fs.writeFileSync("lib/trigger/send-scheduled-email.ts", `
+export const sendDataroomTrialInfoEmailTask = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+
+export const sendDataroomTrialExpiredEmailTask = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+`);
+
+fs.writeFileSync("lib/trigger/cleanup-expired-exports.ts", `
+export const cleanupExpiredExports = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+`);
+
+fs.writeFileSync("ee/features/billing/cancellation/lib/trigger/pause-resume-notification.ts", `
+export const sendPauseResumeNotificationTask = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+`);
+
+fs.writeFileSync("ee/features/conversations/lib/trigger/conversation-message-notification.ts", `
+export const sendConversationMessageNotificationTask = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+
+export const sendConversationTeamMemberNotificationTask = {
+  trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
+};
+`);
 
 const runtimeAppUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL)";
 const runtimeMarketingUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_MARKETING_URL || process.env.NEXT_PUBLIC_BASE_URL)";
