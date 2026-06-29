@@ -52,6 +52,16 @@ middleware = middleware.replace(
 }`
 );
 middleware = middleware.replace(
+`  // Handle incoming webhooks
+  if (isWebhookPath(host)) {
+    return IncomingWebhookMiddleware(req);
+  }`,
+`  // Handle incoming webhooks only on the webhook service path.
+  if (isWebhookPath(host) && path.startsWith("/services/")) {
+    return IncomingWebhookMiddleware(req);
+  }`
+);
+middleware = middleware.replace(
 `  // For custom domains, we need to handle them differently
   if (isCustomDomain(host || "")) {
     return DomainMiddleware(req);
@@ -297,8 +307,8 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXTAUTH_URL=https://gradien-dataroom.up.railway.app \
     NEXTAUTH_SECRET=build-placeholder \
     NEXT_PUBLIC_APP_BASE_HOST=gradien-dataroom.up.railway.app \
-    NEXT_PUBLIC_WEBHOOK_BASE_HOST=gradien-dataroom.up.railway.app \
-    NEXT_PUBLIC_WEBHOOK_BASE_URL=https://gradien-dataroom.up.railway.app \
+    NEXT_PUBLIC_WEBHOOK_BASE_HOST=webhooks.gradien-dataroom.up.railway.app \
+    NEXT_PUBLIC_WEBHOOK_BASE_URL=https://webhooks.gradien-dataroom.up.railway.app \
     NEXT_PUBLIC_MARKETING_URL=https://gradien-dataroom.up.railway.app \
     OPENAI_API_KEY=sk-build-placeholder \
     UPSTASH_REDIS_REST_URL=https://placeholder.upstash.io \
