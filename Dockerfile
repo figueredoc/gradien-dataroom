@@ -11,6 +11,48 @@ RUN git clone --depth 1 --branch ${PAPERMARK_VERSION} https://github.com/mfts/pa
 RUN node <<'NODE'
 const fs = require("fs");
 
+const middlewarePath = "middleware.ts";
+let middleware = fs.readFileSync(middlewarePath, "utf8");
+middleware = middleware.replace(
+`function isCustomDomain(host: string) {
+  return (
+    (process.env.NODE_ENV === "development" &&
+      (host?.includes(".local") || host?.includes("papermark.dev"))) ||
+    (process.env.NODE_ENV !== "development" &&
+      !(
+        host?.includes("localhost") ||
+        host?.includes("papermark.io") ||
+        host?.includes("papermark.com") ||
+        host?.endsWith(".vercel.app") || host?.endsWith(".railway.app")
+      ))
+  );
+}`,
+`function isCustomDomain(host: string) {
+  const normalizedHost = host?.split(":")[0];
+  const appHost = process.env.NEXT_PUBLIC_APP_BASE_HOST?.split(":")[0];
+  const webhookHost = process.env.NEXT_PUBLIC_WEBHOOK_BASE_HOST?.split(":")[0];
+
+  return (
+    (process.env.NODE_ENV === "development" &&
+      (normalizedHost?.includes(".local") ||
+        normalizedHost?.includes("papermark.dev"))) ||
+    (process.env.NODE_ENV !== "development" &&
+      !(
+        normalizedHost?.includes("localhost") ||
+        normalizedHost?.includes("papermark.io") ||
+        normalizedHost?.includes("papermark.com") ||
+        normalizedHost?.endsWith(".vercel.app") ||
+        normalizedHost?.endsWith(".railway.app") ||
+        normalizedHost === appHost ||
+        normalizedHost === webhookHost ||
+        normalizedHost === "gradien-dataroom.up.railway.app" ||
+        normalizedHost === "dataroom.gradien.ai"
+      ))
+  );
+}`
+);
+fs.writeFileSync(middlewarePath, middleware);
+
 fs.writeFileSync("pages/api/file/image-upload-server.ts", `
 import type { NextApiRequest, NextApiResponse } from "next";
 
