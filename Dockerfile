@@ -8,6 +8,101 @@ RUN git clone --depth 1 --branch ${PAPERMARK_VERSION} https://github.com/mfts/pa
     && sed -i 's/host?.endsWith(".vercel.app")/host?.endsWith(".vercel.app") || host?.endsWith(".railway.app")/' middleware.ts \
     && sed -i 's/secret: process.env.NEXTAUTH_SECRET,/secret: process.env.NEXTAUTH_SECRET, cookieName: "next-auth.session-token",/' lib/middleware/app.ts
 
+RUN node <<'NODE'
+const fs = require("fs");
+
+fs.writeFileSync("pages/api/file/image-upload-server.ts", `
+import type { NextApiRequest, NextApiResponse } from "next";
+
+import { put } from "@vercel/blob";
+import { getServerSession } from "next-auth/next";
+
+import { authOptions } from "../auth/[...nextauth]";
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+async function readBody(req: NextApiRequest) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const session = await getServerSession(req, res, authOptions);
+  if (!session) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const filename =
+    typeof req.query.filename === "string" && req.query.filename
+      ? req.query.filename
+      : "logo.png";
+
+  try {
+    const body = await readBody(req);
+    const blob = await put(filename, body, {
+      access: "public",
+      addRandomSuffix: true,
+    });
+
+    return res.status(200).json({ url: blob.url });
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : "Upload failed" });
+  }
+}
+`);
+
+const utilsPath = "lib/utils.ts";
+let utils = fs.readFileSync(utilsPath, "utf8");
+utils = utils.replace(
+`export const uploadImage = async (
+  file: File,
+  uploadType: "profile" | "assets" = "assets",
+) => {
+  const newBlob = await upload(file.name, file, {
+    access: "public",
+    handleUploadUrl: \`/api/file/image-upload?type=\${uploadType}\`,
+  });
+
+  return newBlob.url;
+};`,
+`export const uploadImage = async (
+  file: File,
+  uploadType: "profile" | "assets" = "assets",
+) => {
+  const response = await fetch(
+    \`/api/file/image-upload-server?type=\${uploadType}&filename=\${encodeURIComponent(file.name)}\`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": file.type,
+      },
+      body: file,
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(error?.error || "Failed to upload image");
+  }
+
+  const blob = await response.json();
+  return blob.url;
+};`
+);
+fs.writeFileSync(utilsPath, utils);
+NODE
+
 FROM base AS deps
 WORKDIR /app
 COPY --from=source /app/package.json /app/package-lock.json ./
