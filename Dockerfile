@@ -111,6 +111,60 @@ putFile = putFile.replaceAll(
   "/api/file/s3/",
 );
 
+for (const filePath of [
+  "lib/files/get-file.ts",
+  "lib/files/tus-upload.ts",
+  "lib/files/viewer-tus-upload.ts",
+]) {
+  if (!fs.existsSync(filePath)) continue;
+  let file = fs.readFileSync(filePath, "utf8");
+  file = file
+    .replaceAll("${process.env.NEXT_PUBLIC_BASE_URL}/api/file/s3/", "/api/file/s3/")
+    .replaceAll("${process.env.NEXT_PUBLIC_BASE_URL}/api/file/tus-viewer", "/api/file/tus-viewer")
+    .replaceAll("${process.env.NEXT_PUBLIC_BASE_URL}/api/file/tus", "/api/file/tus");
+  fs.writeFileSync(filePath, file);
+}
+
+const runtimeAppUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL)";
+const runtimeMarketingUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_MARKETING_URL || process.env.NEXT_PUBLIC_BASE_URL)";
+
+for (const filePath of [
+  "ee/features/billing/cancellation/lib/trigger/pause-resume-notification.ts",
+  "ee/features/billing/cancellation/emails/components/pause-resume-reminder.tsx",
+  "ee/features/conversations/api/send-conversation-team-member-notification.ts",
+  "ee/features/conversations/lib/trigger/conversation-message-notification.ts",
+  "lib/documents/create-document.ts",
+  "components/emails/welcome.tsx",
+  "components/emails/upgrade-plan.tsx",
+  "pages/api/teams/[teamId]/invitations/resend.ts",
+  "lib/utils/unsubscribe.ts",
+  "lib/webhook/send-webhooks.ts",
+  "lib/trigger/pdf-to-image-route.ts",
+  "lib/trigger/dataroom-change-notification.ts",
+  "pages/api/teams/[teamId]/invite.ts",
+]) {
+  if (!fs.existsSync(filePath)) continue;
+  let file = fs.readFileSync(filePath, "utf8");
+  file = file.replaceAll("process.env.NEXT_PUBLIC_BASE_URL", runtimeAppUrl);
+  fs.writeFileSync(filePath, file);
+}
+
+for (const filePath of [
+  "ee/emails/pause-resume-reminder.tsx",
+  "ee/features/conversations/lib/trigger/conversation-message-notification.ts",
+  "pages/api/analytics/index.ts",
+  "pages/api/webhooks/services/[...path]/index.ts",
+  "pages/api/jobs/send-dataroom-view-invitation.ts",
+  "lib/trigger/dataroom-change-notification.ts",
+  "pages/api/links/generate-index.ts",
+  "pages/api/teams/[teamId]/datarooms/[id]/generate-index.ts",
+]) {
+  if (!fs.existsSync(filePath)) continue;
+  let file = fs.readFileSync(filePath, "utf8");
+  file = file.replaceAll("process.env.NEXT_PUBLIC_MARKETING_URL", runtimeMarketingUrl);
+  fs.writeFileSync(filePath, file);
+}
+
 const resendPath = "lib/resend.ts";
 let resend = fs.readFileSync(resendPath, "utf8");
 resend = resend
@@ -139,13 +193,13 @@ WORKDIR /app
 COPY --from=source /app .
 COPY --from=deps /app/node_modules ./node_modules
 ENV NEXT_TELEMETRY_DISABLED=1 \
-    NEXT_PUBLIC_BASE_URL=http://localhost:3000 \
-    NEXTAUTH_URL=http://localhost:3000 \
+    NEXT_PUBLIC_BASE_URL=https://gradien-dataroom.up.railway.app \
+    NEXTAUTH_URL=https://gradien-dataroom.up.railway.app \
     NEXTAUTH_SECRET=build-placeholder \
-    NEXT_PUBLIC_APP_BASE_HOST=localhost:3000 \
-    NEXT_PUBLIC_WEBHOOK_BASE_HOST=localhost:3000 \
-    NEXT_PUBLIC_WEBHOOK_BASE_URL=http://localhost:3000 \
-    NEXT_PUBLIC_MARKETING_URL=http://localhost:3000 \
+    NEXT_PUBLIC_APP_BASE_HOST=gradien-dataroom.up.railway.app \
+    NEXT_PUBLIC_WEBHOOK_BASE_HOST=gradien-dataroom.up.railway.app \
+    NEXT_PUBLIC_WEBHOOK_BASE_URL=https://gradien-dataroom.up.railway.app \
+    NEXT_PUBLIC_MARKETING_URL=https://gradien-dataroom.up.railway.app \
     OPENAI_API_KEY=sk-build-placeholder \
     UPSTASH_REDIS_REST_URL=https://placeholder.upstash.io \
     UPSTASH_REDIS_REST_TOKEN=placeholder \
