@@ -1249,6 +1249,106 @@ for (const filePath of [
   fs.writeFileSync(filePath, file);
 }
 
+const appUrlExpression = "process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL";
+const appUrlWithFallbackExpression = `${appUrlExpression} || "https://gradien-dataroom.up.railway.app"`;
+
+function selfHostedHref(path) {
+  if (!path) {
+    return `href={${appUrlWithFallbackExpression}}`;
+  }
+
+  const mappedPath = path === "/data-room" ? "/datarooms" : path;
+  return `href={\`\${${appUrlExpression}}${mappedPath}\`}`;
+}
+
+function walkFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) return walkFiles(entryPath);
+    return /\.(tsx?|jsx?)$/.test(entry.name) ? [entryPath] : [];
+  });
+}
+
+for (const filePath of [
+  ...walkFiles("components/emails"),
+  ...walkFiles("lib/emails"),
+  ...walkFiles("ee/emails"),
+  ...walkFiles("ee/features/billing/cancellation/emails"),
+]) {
+  let file = fs.readFileSync(filePath, "utf8");
+  file = file
+    .replace(/href="https:\/\/app\.papermark\.com([^"]*)"/g, (_match, path) =>
+      selfHostedHref(path),
+    )
+    .replaceAll(
+      "`https://app.papermark.com",
+      "`${" + appUrlExpression + "}",
+    )
+    .replace(/href="https:\/\/www\.papermark\.com([^"]*)"/g, (_match, path) =>
+      selfHostedHref(path),
+    )
+    .replace(/href="https:\/\/papermark\.com([^"]*)"/g, (_match, path) =>
+      selfHostedHref(path),
+    )
+    .replace(
+      /(url|confirmUrl) = "https:\/\/www\.papermark\.com",/g,
+      `$1 = ${appUrlWithFallbackExpression},`,
+    )
+    .replace(
+      /(url|confirmUrl) = "https:\/\/app\.papermark\.com([^"]*)",/g,
+      (_match, name, path) =>
+        `${name} = \`\${${appUrlExpression}}${path}\`,`,
+    )
+    .replaceAll(
+      "https%3A%2F%2Fwww.papermark.com%2Fyear-in-review",
+      "https%3A%2F%2Fdataroom.gradien.ai",
+    )
+    .replaceAll("papermark.com", "dataroom.gradien.ai");
+  fs.writeFileSync(filePath, file);
+}
+
+replaceAllInFile("pages/api/auth/[...nextauth].ts", [
+  [
+    'return process.env.NEXTAUTH_URL || "https://app.papermark.com";',
+    'return process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "https://gradien-dataroom.up.railway.app";',
+  ],
+]);
+
+for (const filePath of [
+  "lib/api/views/send-webhook-event.ts",
+  "lib/webhook/triggers/link-created.ts",
+]) {
+  if (!fs.existsSync(filePath)) continue;
+  let file = fs.readFileSync(filePath, "utf8");
+  file = file
+    .replaceAll(
+      "`https://www.papermark.com/view/${link.id}`",
+      "`${" + runtimeMarketingUrl + "}/view/${link.id}`",
+    )
+    .replaceAll(
+      'link.domainId && link.domainSlug ? link.domainSlug : "papermark.com"',
+      'link.domainId && link.domainSlug ? link.domainSlug : new URL((' +
+        runtimeMarketingUrl +
+        ') || "https://gradien-dataroom.up.railway.app").host',
+    );
+  fs.writeFileSync(filePath, file);
+}
+
+for (const filePath of [
+  "pages/view/[linkId]/d/[documentId].tsx",
+  "pages/view/[linkId]/index.tsx",
+]) {
+  if (!fs.existsSync(filePath)) continue;
+  let file = fs.readFileSync(filePath, "utf8");
+  file = file.replaceAll(
+    "`https://www.papermark.com/view/${linkId}`",
+    "`${" + runtimeMarketingUrl + "}/view/${linkId}`",
+  );
+  fs.writeFileSync(filePath, file);
+}
+
 const awsClientPath = "lib/files/aws-client.ts";
 let awsClient = fs.readFileSync(awsClientPath, "utf8");
 awsClient = awsClient.replaceAll(
