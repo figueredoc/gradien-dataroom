@@ -260,7 +260,7 @@ pdfRoute = pdfRoute.replace(
 import { getFile } from "@/lib/files/get-file";`,
 `import * as mupdf from "mupdf";
 
-const logger = { info: console.log, error: console.error };
+const logger = { info: console.log, warn: console.warn, error: console.error };
 
 import { getFile } from "@/lib/files/get-file";
 import { putFileServer } from "@/lib/files/put-file-server";`,
@@ -615,7 +615,7 @@ const exportVisitsPath = "lib/trigger/export-visits.ts";
 let exportVisits = fs.readFileSync(exportVisitsPath, "utf8");
 exportVisits = exportVisits.replace(
   'import { logger, task } from "@trigger.dev/sdk/v3";',
-  'const logger = { info: console.log, error: console.error };',
+  'const logger = { info: console.log, warn: console.warn, error: console.error };',
 );
 exportVisits = exportVisits.replace(
 `export const exportVisitsTask = task({
