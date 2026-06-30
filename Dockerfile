@@ -1021,6 +1021,194 @@ const getBrandLogoSrc = (logo?: string | null) => {
   ],
 ]);
 
+replaceInFile("pages/api/record_view.ts", [
+  [
+    `  try {
+    await publishPageView(result.data);
+
+    res.status(200).json({ message: "View recorded" });
+  } catch (error) {
+    log({
+      message: \`Failed to record view (tinybird) for \${linkId}. \\n\\n \${error}\`,
+      type: "error",
+      mention: true,
+    });
+    res.status(500).json({ message: (error as Error).message });
+  }`,
+    `  try {
+    await publishPageView(result.data);
+
+    return res.status(200).json({ message: "View recorded" });
+  } catch (error) {
+    log({
+      message: \`Failed to record view (tinybird) for \${linkId}. \\n\\n \${error}\`,
+      type: "error",
+      mention: true,
+    });
+    return res.status(200).json({
+      message: "View accepted without duration analytics",
+    });
+  }`,
+  ],
+]);
+
+replaceInFile("pages/api/links/[id]/visits.ts", [
+  [
+    `      const durationsPromises = limitedViews.map((view) => {
+        return getViewPageDuration({
+          documentId: view.documentId!,
+          viewId: view.id,
+          since: 0,
+        });
+      });
+
+      const durations = await Promise.all(durationsPromises);`,
+    `      const durations = await Promise.all(
+        limitedViews.map(async (view) => {
+          try {
+            return await getViewPageDuration({
+              documentId: view.documentId!,
+              viewId: view.id,
+              since: 0,
+            });
+          } catch (error) {
+            console.error("Failed to get Tinybird duration for view", view.id, error);
+            return { data: [] as { pageNumber: string; sum_duration: number }[] };
+          }
+        }),
+      );`,
+  ],
+]);
+
+replaceInFile("pages/api/teams/[teamId]/documents/[id]/views/index.ts", [
+  [
+    `async function getDocumentViews(views: ViewWithExtras[], document: Document) {
+  const durationsPromises = views.map((view) => {
+    return getViewPageDuration({
+      documentId: document.id,
+      viewId: view.id,
+      since: 0,
+    });
+  });
+
+  const durations = await Promise.all(durationsPromises);`,
+    `async function getDocumentViews(views: ViewWithExtras[], document: Document) {
+  const durations = await Promise.all(
+    views.map(async (view) => {
+      try {
+        return await getViewPageDuration({
+          documentId: document.id,
+          viewId: view.id,
+          since: 0,
+        });
+      } catch (error) {
+        console.error("Failed to get Tinybird duration for view", view.id, error);
+        return { data: [] as { pageNumber: string; sum_duration: number }[] };
+      }
+    }),
+  );`,
+  ],
+  [
+    `      let viewsWithDuration;
+      if (document.type === "video") {
+        const videoEvents = await getVideoEventsByDocument({
+          document_id: docId,
+        });
+        viewsWithDuration = await getVideoViews(
+          limitedViews,
+          document,
+          videoEvents,
+        );
+      } else {
+        viewsWithDuration = await getDocumentViews(limitedViews, document);
+      }`,
+    `      let viewsWithDuration;
+      if (document.type === "video") {
+        let videoEvents = { data: [] as VideoEvent[] };
+        try {
+          videoEvents = await getVideoEventsByDocument({
+            document_id: docId,
+          });
+        } catch (error) {
+          console.error("Failed to get Tinybird video events for document", docId, error);
+        }
+        viewsWithDuration = await getVideoViews(
+          limitedViews,
+          document,
+          videoEvents,
+        );
+      } else {
+        viewsWithDuration = await getDocumentViews(limitedViews, document);
+      }`,
+  ],
+]);
+
+replaceInFile("pages/api/teams/[teamId]/documents/[id]/stats.ts", [
+  [
+    `      const duration = await getTotalAvgPageDuration({
+        documentId: docId,
+        excludedLinkIds: "",
+        excludedViewIds: allExcludedViews.map((view) => view.id).join(","),
+        since: 0,
+      });
+
+      const totalDocumentDuration = await getTotalDocumentDuration({
+        documentId: docId,
+        excludedLinkIds: "",
+        excludedViewIds: allExcludedViews.map((view) => view.id).join(","),
+        since: 0,
+      });
+
+      const stats = {
+        views: filteredViews,
+        duration,
+        total_duration:
+          (totalDocumentDuration.data[0].sum_duration * 1.0) /
+          filteredViews.length,
+        groupedReactions,
+        totalViews: filteredViews.length,
+      };`,
+    `      let duration = {
+        data: [] as {
+          versionNumber: number;
+          pageNumber: string;
+          avg_duration: number;
+        }[],
+      };
+      let totalDocumentDuration = { data: [{ sum_duration: 0 }] };
+
+      try {
+        [duration, totalDocumentDuration] = await Promise.all([
+          getTotalAvgPageDuration({
+            documentId: docId,
+            excludedLinkIds: "",
+            excludedViewIds: allExcludedViews.map((view) => view.id).join(","),
+            since: 0,
+          }),
+          getTotalDocumentDuration({
+            documentId: docId,
+            excludedLinkIds: "",
+            excludedViewIds: allExcludedViews.map((view) => view.id).join(","),
+            since: 0,
+          }),
+        ]);
+      } catch (error) {
+        console.error("Failed to get Tinybird document stats", docId, error);
+      }
+
+      const stats = {
+        views: filteredViews,
+        duration,
+        total_duration: filteredViews.length
+          ? ((totalDocumentDuration.data[0]?.sum_duration || 0) * 1.0) /
+            filteredViews.length
+          : 0,
+        groupedReactions,
+        totalViews: filteredViews.length,
+      };`,
+  ],
+]);
+
 const runtimeAppUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL)";
 const runtimeMarketingUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_MARKETING_URL || process.env.NEXT_PUBLIC_BASE_URL)";
 
