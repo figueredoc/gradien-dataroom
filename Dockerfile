@@ -757,11 +757,11 @@ for (const filePath of [
 // the non-null assertion just satisfies the type checker.
 replaceAllInFile("ee/features/conversations/api/conversations-route.ts", [
   ["teamId: team.id,", "teamId: team!.id,"],
-  ["${team.id}-", "${team!.id}-"],
+  ["${team.id}", "${team!.id}"],
 ]);
 replaceAllInFile("ee/features/conversations/api/team-conversations-route.ts", [
   ["teamId: team.id,", "teamId: team!.id,"],
-  ["${team.id}-", "${team!.id}-"],
+  ["${team.id}", "${team!.id}"],
 ]);
 
 fs.writeFileSync("trigger.config.ts", `
