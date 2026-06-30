@@ -164,6 +164,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 }
 `);
 
+fs.writeFileSync("pages/api/brand-image.ts", `
+import type { NextApiRequest, NextApiResponse } from "next";
+
+const isAllowedBrandImageHost = (host: string) =>
+  host.endsWith(".blob.vercel-storage.com");
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const rawUrl = Array.isArray(req.query.url) ? req.query.url[0] : req.query.url;
+  if (!rawUrl) {
+    return res.status(400).json({ error: "Missing image URL" });
+  }
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return res.status(400).json({ error: "Invalid image URL" });
+  }
+
+  if (url.protocol !== "https:" || !isAllowedBrandImageHost(url.hostname)) {
+    return res.status(400).json({ error: "Unsupported image URL" });
+  }
+
+  const token =
+    process.env.NEXT_PRIVATE_BRANDING_BLOB_READ_WRITE_TOKEN ||
+    process.env.BLOB_READ_WRITE_TOKEN;
+
+  let response = await fetch(url.toString());
+  if (!response.ok && token && [401, 403].includes(response.status)) {
+    response = await fetch(url.toString(), {
+      headers: { Authorization: \`Bearer \${token}\` },
+    });
+  }
+
+  if (!response.ok) {
+    return res.status(response.status).json({ error: "Image not found" });
+  }
+
+  const contentType = response.headers.get("content-type") || "image/png";
+  const body = Buffer.from(await response.arrayBuffer());
+
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=86400");
+  return res.status(200).send(body);
+}
+`);
+
 const utilsPath = "lib/utils.ts";
 let utils = fs.readFileSync(utilsPath, "utf8");
 utils = utils.replace(
@@ -825,6 +876,150 @@ export const sendConversationTeamMemberNotificationTask = {
   trigger: async (..._args: unknown[]) => ({ id: "trigger-disabled" }),
 };
 `);
+
+replaceInFile("components/view/nav.tsx", [
+  [
+    `import ReportForm from "./report-form";`,
+    `import ReportForm from "./report-form";
+
+const getBrandLogoSrc = (logo?: string | null) => {
+  if (!logo) return "";
+  if (logo.startsWith("https://") && logo.includes(".blob.vercel-storage.com")) {
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "";
+    return \`\${baseUrl}/api/brand-image?url=\${encodeURIComponent(logo)}\`;
+  }
+  return logo;
+};`,
+  ],
+  [
+    `  const [showConversations, setShowConversations] = useState(false);`,
+    `  const [showConversations, setShowConversations] = useState(false);
+  const [logoError, setLogoError] = useState(false);
+
+  useEffect(() => {
+    setLogoError(false);
+  }, [brand?.logo]);
+
+  const brandLogoSrc =
+    !logoError && brand?.logo ? getBrandLogoSrc(brand.logo as string) : "";`,
+  ],
+  [
+    `              {brand && brand.logo ? (
+                <img
+                  className="h-16 w-36 object-contain"
+                  src={brand.logo}
+                  alt="Logo"
+                  // fill
+                  // quality={100}
+                  // priority
+                />
+              ) : (`,
+    `              {brandLogoSrc ? (
+                <img
+                  className="h-16 w-36 object-contain"
+                  src={brandLogoSrc}
+                  alt="Logo"
+                  onError={() => setLogoError(true)}
+                />
+              ) : (`,
+  ],
+]);
+
+replaceInFile("components/view/dataroom/nav-dataroom.tsx", [
+  [
+    `const DEFAULT_BANNER_IMAGE = "/_static/papermark-banner.png";`,
+    `const DEFAULT_BANNER_IMAGE = "/_static/papermark-banner.png";
+
+const getBrandLogoSrc = (logo?: string | null) => {
+  if (!logo) return "";
+  if (logo.startsWith("https://") && logo.includes(".blob.vercel-storage.com")) {
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "";
+    return \`\${baseUrl}/api/brand-image?url=\${encodeURIComponent(logo)}\`;
+  }
+  return logo;
+};`,
+  ],
+  [
+    `  const [showConversations, setShowConversations] = useState<boolean>(false);`,
+    `  const [showConversations, setShowConversations] = useState<boolean>(false);
+  const [logoError, setLogoError] = useState(false);
+
+  useEffect(() => {
+    setLogoError(false);
+  }, [brand?.logo]);
+
+  const brandLogoSrc =
+    !logoError && brand?.logo ? getBrandLogoSrc(brand.logo as string) : "";`,
+  ],
+  [
+    `              {brand && brand.logo ? (
+                <img
+                  className="h-16 w-36 object-contain"
+                  src={brand.logo}
+                  alt="Logo"
+                />
+              ) : (`,
+    `              {brandLogoSrc ? (
+                <img
+                  className="h-16 w-36 object-contain"
+                  src={brandLogoSrc}
+                  alt="Logo"
+                  onError={() => setLogoError(true)}
+                />
+              ) : (`,
+  ],
+]);
+
+replaceInFile("components/view/access-form/index.tsx", [
+  [
+    `export const DEFAULT_ACCESS_FORM_DATA = {
+  email: null,
+  password: null,
+};`,
+    `export const DEFAULT_ACCESS_FORM_DATA = {
+  email: null,
+  password: null,
+};
+
+const getBrandLogoSrc = (logo?: string | null) => {
+  if (!logo) return "";
+  if (logo.startsWith("https://") && logo.includes(".blob.vercel-storage.com")) {
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "";
+    return \`\${baseUrl}/api/brand-image?url=\${encodeURIComponent(logo)}\`;
+  }
+  return logo;
+};`,
+  ],
+  [
+    `  const [isEmailValid, setIsEmailValid] = useState(true);`,
+    `  const [isEmailValid, setIsEmailValid] = useState(true);
+  const [logoError, setLogoError] = useState(false);
+
+  useEffect(() => {
+    setLogoError(false);
+  }, [brand?.logo]);
+
+  const brandLogoSrc =
+    !logoError && brand?.logo ? getBrandLogoSrc(brand.logo as string) : "";`,
+  ],
+  [
+    `      {logoOnAccessForm && brand && brand.logo && (`,
+    `      {logoOnAccessForm && brand && brandLogoSrc && (`,
+  ],
+  [
+    `            <img
+              src={brand.logo as string}
+              alt="Brand Logo"
+              className="h-16 w-auto object-contain"
+            />`,
+    `            <img
+              src={brandLogoSrc}
+              alt="Brand Logo"
+              className="h-16 w-auto object-contain"
+              onError={() => setLogoError(true)}
+            />`,
+  ],
+]);
 
 const runtimeAppUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL)";
 const runtimeMarketingUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_MARKETING_URL || process.env.NEXT_PUBLIC_BASE_URL)";
