@@ -1349,6 +1349,149 @@ for (const filePath of [
   fs.writeFileSync(filePath, file);
 }
 
+const watermarkPanelPath = "components/links/link-sheet/watermark-panel/index.tsx";
+let watermarkPanel = fs.readFileSync(watermarkPanelPath, "utf8");
+watermarkPanel = watermarkPanel
+  .replace(
+`interface WatermarkConfigSheetProps {
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  initialConfig: Partial<WatermarkConfig>;
+  onSave: (config: WatermarkConfig) => void;
+}`,
+`interface WatermarkConfigSheetProps {
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  initialConfig: Partial<WatermarkConfig>;
+  onSave: (config: WatermarkConfig) => void;
+}
+
+const normalizeOpacity = (opacity: number | undefined) => {
+  if (typeof opacity !== "number" || Number.isNaN(opacity)) return opacity;
+
+  const value = opacity > 1 ? opacity / 100 : opacity;
+  return Math.max(0, Math.min(value, 1));
+};`,
+  )
+  .replace(
+`  const [formValues, setFormValues] =
+    useState<Partial<WatermarkConfig>>(initialConfig);`,
+`  const [formValues, setFormValues] = useState<Partial<WatermarkConfig>>({
+    ...initialConfig,
+    opacity: normalizeOpacity(initialConfig.opacity),
+  });`,
+  )
+  .replace(
+`  useEffect(() => {
+    setFormValues(initialConfig);
+  }, [initialConfig]);`,
+`  useEffect(() => {
+    setFormValues({
+      ...initialConfig,
+      opacity: normalizeOpacity(initialConfig.opacity),
+    });
+  }, [initialConfig]);`,
+  )
+  .replace(
+    '<Label htmlFor="watermark-opacity">Transparency</Label>',
+    '<Label htmlFor="watermark-opacity">Opacity</Label>',
+  )
+  .replace(
+    '<SelectValue placeholder="Select transparency" />',
+    '<SelectValue placeholder="Select opacity" />',
+  )
+  .replace(
+`                      <SelectItem value="1">No transparency</SelectItem>
+                      <SelectItem value="0.25">75%</SelectItem>
+                      <SelectItem value="0.5">50%</SelectItem>
+                      <SelectItem value="0.75">25%</SelectItem>`,
+`                      <SelectItem value="1">100%</SelectItem>
+                      <SelectItem value="0.75">75%</SelectItem>
+                      <SelectItem value="0.5">50%</SelectItem>
+                      <SelectItem value="0.25">25%</SelectItem>
+                      <SelectItem value="0.15">15%</SelectItem>
+                      <SelectItem value="0.1">10%</SelectItem>`,
+  );
+fs.writeFileSync(watermarkPanelPath, watermarkPanel);
+
+const watermarkSectionPath = "components/links/link-sheet/watermark-section.tsx";
+let watermarkSection = fs.readFileSync(watermarkSectionPath, "utf8");
+watermarkSection = watermarkSection
+  .replace(
+`  const handleConfigSave = (config: WatermarkConfig) => {
+    setData({
+      ...data,
+      watermarkConfig: config,
+    });
+  };`,
+`  const normalizedOpacity =
+    initialconfig.opacity > 1 ? initialconfig.opacity / 100 : initialconfig.opacity;
+  const opacityPercent = Math.round(
+    Math.max(0, Math.min(normalizedOpacity, 1)) * 100,
+  );
+
+  const handleConfigSave = (config: WatermarkConfig) => {
+    setData({
+      ...data,
+      watermarkConfig: config,
+    });
+  };`,
+  )
+  .replace("{(1 - initialconfig.opacity) * 100}% transparent", "{opacityPercent}% opacity");
+fs.writeFileSync(watermarkSectionPath, watermarkSection);
+
+const watermarkSvgPath = "components/view/watermark-svg.tsx";
+let watermarkSvg = fs.readFileSync(watermarkSvgPath, "utf8");
+watermarkSvg = watermarkSvg
+  .replace(
+`export const SVGWatermark = ({`,
+`const normalizeOpacity = (opacity: number) => {
+  const value = opacity > 1 ? opacity / 100 : opacity;
+  return Math.max(0, Math.min(Number.isFinite(value) ? value : 1, 1));
+};
+
+export const SVGWatermark = ({`,
+  )
+  .replace(
+`  const fontSize = calculateFontSize();`,
+`  const fontSize = calculateFontSize();
+  const opacity = normalizeOpacity(config.opacity);`,
+  )
+  .replaceAll("opacity={config.opacity}", "opacity={opacity}");
+fs.writeFileSync(watermarkSvgPath, watermarkSvg);
+
+const annotateDocumentPath = "pages/api/mupdf/annotate-document.ts";
+let annotateDocument = fs.readFileSync(annotateDocumentPath, "utf8");
+annotateDocument = annotateDocument
+  .replace(
+`interface ViewerData {
+  email: string;
+  date: string;
+  ipAddress: string;
+  link: string;
+  time: string;
+}`,
+`interface ViewerData {
+  email: string;
+  date: string;
+  ipAddress: string;
+  link: string;
+  time: string;
+}
+
+function normalizeOpacity(opacity: number): number {
+  const value = opacity > 1 ? opacity / 100 : opacity;
+  return Math.max(0, Math.min(Number.isFinite(value) ? value : 1, 1));
+}`,
+  )
+  .replace(
+`  const fontSize = calculateFontSize();`,
+`  const fontSize = calculateFontSize();
+  const opacity = normalizeOpacity(config.opacity);`,
+  )
+  .replaceAll("opacity: config.opacity,", "opacity,");
+fs.writeFileSync(annotateDocumentPath, annotateDocument);
+
 const awsClientPath = "lib/files/aws-client.ts";
 let awsClient = fs.readFileSync(awsClientPath, "utf8");
 awsClient = awsClient.replaceAll(
