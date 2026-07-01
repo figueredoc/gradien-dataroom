@@ -1756,6 +1756,94 @@ replaceInFile("lib/tracking/record-link-view.ts", [
   ],
 ]);
 
+replaceInFile("lib/tracking/record-link-view.ts", [
+  [
+    `import { LOCALHOST_GEO_DATA, LOCALHOST_IP } from "../utils/geo";`,
+    `import { LOCALHOST_GEO_DATA, LOCALHOST_IP } from "../utils/geo";
+
+function isPublicIp(ip?: string | null) {
+  if (!ip || ip === LOCALHOST_IP) return false;
+  if (ip.startsWith("10.") || ip.startsWith("192.168.")) return false;
+  if (/^172\\.(1[6-9]|2\\d|3[0-1])\\./.test(ip)) return false;
+  if (ip === "::1" || ip.startsWith("fc") || ip.startsWith("fd")) return false;
+  return true;
+}
+
+async function lookupGeo(ip?: string | null) {
+  if (!isPublicIp(ip)) return null;
+  if (process.env.IP_GEOLOCATION_PROVIDER !== "ipapi") return null;
+
+  const apiKey = process.env.IPAPI_API_KEY;
+  const url = apiKey
+    ? \`https://ipapi.co/\${ip}/json/?key=\${apiKey}\`
+    : \`https://ipapi.co/\${ip}/json/\`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1200);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (data.error) return null;
+
+    return {
+      continent: data.continent_code || LOCALHOST_GEO_DATA.continent,
+      country:
+        data.country_code || data.country_name || LOCALHOST_GEO_DATA.country,
+      region: data.region_code || data.region || LOCALHOST_GEO_DATA.region,
+      city: data.city || LOCALHOST_GEO_DATA.city,
+      latitude:
+        data.latitude != null
+          ? String(data.latitude)
+          : LOCALHOST_GEO_DATA.latitude,
+      longitude:
+        data.longitude != null
+          ? String(data.longitude)
+          : LOCALHOST_GEO_DATA.longitude,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}`,
+  ],
+  [
+    `  const { continent, region } =
+    process.env.VERCEL === "1"
+      ? {
+          continent: req.headers.get("x-vercel-ip-continent"),
+          region: geolocation(req).countryRegion,
+        }
+      : LOCALHOST_GEO_DATA;
+
+  const geo =
+    process.env.VERCEL === "1"
+      ? geolocation(req)
+      : {
+          ...LOCALHOST_GEO_DATA,
+          country:
+            req.headers.get("cf-ipcountry") || LOCALHOST_GEO_DATA.country,
+        };`,
+    `  const fallbackGeo = {
+    ...LOCALHOST_GEO_DATA,
+    country: req.headers.get("cf-ipcountry") || LOCALHOST_GEO_DATA.country,
+  };
+  const geo =
+    process.env.VERCEL === "1"
+      ? geolocation(req)
+      : (await lookupGeo(ip)) || fallbackGeo;
+  const fallbackGeoResult = geo as typeof LOCALHOST_GEO_DATA;
+
+  const continent =
+    process.env.VERCEL === "1"
+      ? req.headers.get("x-vercel-ip-continent")
+      : fallbackGeoResult.continent;
+  const region =
+    process.env.VERCEL === "1" ? geolocation(req).countryRegion : fallbackGeoResult.region;`,
+  ],
+]);
+
 const runtimeAppUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL)";
 const runtimeMarketingUrl = "(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_MARKETING_URL || process.env.NEXT_PUBLIC_BASE_URL)";
 
