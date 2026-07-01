@@ -2018,13 +2018,27 @@ replaceInFile("pages/api/analytics/index.ts", [
   "7d": 7 * 24 * 60 * 60 * 1000, // 7 days in ms
   "30d": 30 * 24 * 60 * 60 * 1000, // 30 days in ms
 } as const;`,
-    `async function getStoredDurationSum(where: any) {
-  const duration = await prisma.pageViewEvent.aggregate({
+    `async function getStoredDurationSums({
+  by,
+  where,
+}: {
+  by: string[];
+  where: any;
+}) {
+  const rows = await prisma.pageViewEvent.groupBy({
+    by: by as any,
     where,
     _sum: { duration: true },
   });
 
-  return duration._sum.duration || 0;
+  const durationByKey = new Map<string, number>();
+
+  for (const row of rows) {
+    const key = by.map((field) => String((row as any)[field] || "")).join(":");
+    durationByKey.set(key, row._sum.duration || 0);
+  }
+
+  return durationByKey;
 }
 
 async function getStoredPageDurations(where: any) {
@@ -2042,6 +2056,36 @@ async function getStoredPageDurations(where: any) {
       }))
       .sort((a, b) => Number(a.pageNumber) - Number(b.pageNumber)),
   };
+}
+
+async function getStoredPageDurationsByView(where: any) {
+  const rows = await prisma.pageViewEvent.groupBy({
+    by: ["viewId", "pageNumber"],
+    where,
+    _sum: { duration: true },
+  });
+
+  const durationByView = new Map<
+    string,
+    { data: { pageNumber: string; sum_duration: number }[] }
+  >();
+
+  for (const row of rows) {
+    const existing = durationByView.get(row.viewId) || { data: [] };
+    existing.data.push({
+      pageNumber: row.pageNumber,
+      sum_duration: row._sum.duration || 0,
+    });
+    durationByView.set(row.viewId, existing);
+  }
+
+  for (const duration of durationByView.values()) {
+    duration.data.sort(
+      (a, b) => Number(a.pageNumber) - Number(b.pageNumber),
+    );
+  }
+
+  return durationByView;
 }`,
   ],
   [
@@ -2199,6 +2243,130 @@ async function getStoredPageDurations(where: any) {
                   ? (pageData.data.length / numPages) * 100
                   : 0;
               }`,
+  ],
+  [
+    `        // Transform the data to match the table requirements
+        const transformedLinks = await Promise.all(`,
+    `        const linkIds = links.map((link) => link.id);
+        const linkDurationById = linkIds.length
+          ? await getStoredDurationSums({
+              by: ["linkId"],
+              where: {
+                linkId: { in: linkIds },
+                createdAt: intervalFilter,
+              },
+            })
+          : new Map<string, number>();
+
+        // Transform the data to match the table requirements
+        const transformedLinks = await Promise.all(`,
+  ],
+  [
+    `            let avgDuration = "0s";
+
+            if (link.documentId && link._count.views) {
+              const totalDuration = await getStoredDurationSum({
+                linkId: link.id,
+                documentId: link.documentId,
+                createdAt: intervalFilter,
+              });
+              avgDuration = durationFormat(totalDuration / link._count.views);
+            }`,
+    `            let avgDuration = "0s";
+
+            if (link.documentId && link._count.views) {
+              const totalDuration = linkDurationById.get(link.id) || 0;
+              avgDuration = durationFormat(totalDuration / link._count.views);
+            }`,
+  ],
+  [
+    `        // Transform the data to match the table requirements
+        const transformedDocuments = await Promise.all(`,
+    `        const documentIds = documents.map((doc) => doc.id);
+        const documentDurationById = documentIds.length
+          ? await getStoredDurationSums({
+              by: ["documentId"],
+              where: {
+                documentId: { in: documentIds },
+                createdAt: intervalFilter,
+              },
+            })
+          : new Map<string, number>();
+
+        // Transform the data to match the table requirements
+        const transformedDocuments = await Promise.all(`,
+  ],
+  [
+    `            let avgDuration = "0s";
+            if (doc._count.views) {
+              const totalDuration = await getStoredDurationSum({
+                documentId: doc.id,
+                createdAt: intervalFilter,
+              });
+              avgDuration = durationFormat(totalDuration / doc._count.views);
+            }`,
+    `            let avgDuration = "0s";
+            if (doc._count.views) {
+              const totalDuration = documentDurationById.get(doc.id) || 0;
+              avgDuration = durationFormat(totalDuration / doc._count.views);
+            }`,
+  ],
+  [
+    `        // Transform the data to match the table requirements
+        const transformedVisitors = await Promise.all(`,
+    `        const allViewIds = viewers.flatMap((viewer) =>
+          viewer.views.map((view) => view.id),
+        );
+        const durationByViewId = allViewIds.length
+          ? await getStoredDurationSums({
+              by: ["viewId"],
+              where: {
+                viewId: { in: allViewIds },
+                createdAt: intervalFilter,
+              },
+            })
+          : new Map<string, number>();
+
+        // Transform the data to match the table requirements
+        const transformedVisitors = await Promise.all(`,
+  ],
+  [
+    `            let totalDuration = 0;
+            const viewIds = viewer.views.map((view) => view.id);
+            if (viewIds.length) {
+              totalDuration = await getStoredDurationSum({
+                viewId: { in: viewIds },
+                createdAt: intervalFilter,
+              });
+            }`,
+    `            const totalDuration = viewer.views.reduce(
+              (total, view) => total + (durationByViewId.get(view.id) || 0),
+              0,
+            );`,
+  ],
+  [
+    `        // Transform the data to match the table requirements
+        const transformedViews = await Promise.all(`,
+    `        const viewIds = views.map((view) => view.id);
+        const pageDurationsByViewId = viewIds.length
+          ? await getStoredPageDurationsByView({
+              viewId: { in: viewIds },
+              createdAt: intervalFilter,
+            })
+          : new Map<string, { data: { pageNumber: string; sum_duration: number }[] }>();
+
+        // Transform the data to match the table requirements
+        const transformedViews = await Promise.all(`,
+  ],
+  [
+    `              const pageData = await getStoredPageDurations({
+                documentId: view.document.id,
+                viewId: view.id,
+                createdAt: intervalFilter,
+              });`,
+    `              const pageData = pageDurationsByViewId.get(view.id) || {
+                data: [],
+              };`,
   ],
 ]);
 
