@@ -1078,6 +1078,30 @@ model PageViewEvent {
 `;
   fs.writeFileSync(schemaPath, schema);
 }
+if (!schema.includes("model LinkClickEvent")) {
+  schema += `
+
+model LinkClickEvent {
+  id            String   @id
+  sessionId     String
+  linkId        String
+  documentId    String
+  viewId        String
+  dataroomId    String?
+  pageNumber    String
+  href          String
+  versionNumber Int      @default(1)
+  timestamp     DateTime
+  createdAt     DateTime @default(now())
+
+  @@index([documentId])
+  @@index([viewId])
+  @@index([documentId, viewId])
+  @@index([timestamp])
+}
+`;
+  fs.writeFileSync(schemaPath, schema);
+}
 
 const pageViewMigrationDir = "prisma/migrations/20260630000000_add_page_view_events";
 fs.mkdirSync(pageViewMigrationDir, { recursive: true });
@@ -1103,6 +1127,33 @@ CREATE INDEX "PageViewEvent_documentId_idx" ON "PageViewEvent"("documentId");
 CREATE INDEX "PageViewEvent_viewId_idx" ON "PageViewEvent"("viewId");
 CREATE INDEX "PageViewEvent_documentId_viewId_idx" ON "PageViewEvent"("documentId", "viewId");
 CREATE INDEX "PageViewEvent_time_idx" ON "PageViewEvent"("time");
+`,
+);
+
+const linkClickMigrationDir = "prisma/migrations/20260630220000_add_link_click_events";
+fs.mkdirSync(linkClickMigrationDir, { recursive: true });
+fs.writeFileSync(
+  `${linkClickMigrationDir}/migration.sql`,
+  `CREATE TABLE "LinkClickEvent" (
+    "id" TEXT NOT NULL,
+    "sessionId" TEXT NOT NULL,
+    "linkId" TEXT NOT NULL,
+    "documentId" TEXT NOT NULL,
+    "viewId" TEXT NOT NULL,
+    "dataroomId" TEXT,
+    "pageNumber" TEXT NOT NULL,
+    "href" TEXT NOT NULL,
+    "versionNumber" INTEGER NOT NULL DEFAULT 1,
+    "timestamp" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "LinkClickEvent_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX "LinkClickEvent_documentId_idx" ON "LinkClickEvent"("documentId");
+CREATE INDEX "LinkClickEvent_viewId_idx" ON "LinkClickEvent"("viewId");
+CREATE INDEX "LinkClickEvent_documentId_viewId_idx" ON "LinkClickEvent"("documentId", "viewId");
+CREATE INDEX "LinkClickEvent_timestamp_idx" ON "LinkClickEvent"("timestamp");
 `,
 );
 
@@ -1135,6 +1186,47 @@ import { publishPageView } from "@/lib/tinybird";`,
 
   try {
     await publishPageView(result.data);`,
+  ],
+]);
+
+replaceInFile("pages/api/record_click.ts", [
+  [
+    `import { newId } from "@/lib/id-helper";
+import { recordClickEvent } from "@/lib/tinybird";`,
+    `import { newId } from "@/lib/id-helper";
+import prisma from "@/lib/prisma";
+import { recordClickEvent } from "@/lib/tinybird";`,
+  ],
+  [
+    `  try {
+    await recordClickEvent(result.data);
+    res.status(200).json({ message: "Click event recorded" });`,
+    `  try {
+    await prisma.linkClickEvent.create({
+      data: {
+        id: result.data.event_id,
+        sessionId: result.data.session_id,
+        linkId: result.data.link_id,
+        documentId: result.data.document_id,
+        viewId: result.data.view_id,
+        dataroomId: result.data.dataroom_id || null,
+        pageNumber: result.data.page_number,
+        href: result.data.href,
+        versionNumber: result.data.version_number,
+        timestamp: new Date(result.data.timestamp),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to store click event", result.data.event_id, error);
+  }
+
+  try {
+    await recordClickEvent(result.data);
+    res.status(200).json({ message: "Click event recorded" });`,
+  ],
+  [
+    `    res.status(500).json({ error: "Failed to record click event" });`,
+    `    res.status(200).json({ message: "Click event accepted without Tinybird" });`,
   ],
 ]);
 
@@ -1215,6 +1307,62 @@ import { authOptions } from "../../auth/[...nextauth]";`,
               documentId: view.documentId!,
               viewId: view.id,
             });`,
+  ],
+]);
+
+replaceInFile("pages/api/teams/[teamId]/documents/[id]/views/[viewId]/click-events.ts", [
+  [
+    `import { log } from "@/lib/utils";`,
+    `import { log } from "@/lib/utils";
+
+async function getStoredClickEventsByView({
+  documentId,
+  viewId,
+}: {
+  documentId: string;
+  viewId: string;
+}) {
+  const rows = await prisma.linkClickEvent.findMany({
+    where: {
+      documentId,
+      viewId,
+    },
+    orderBy: {
+      timestamp: "asc",
+    },
+  });
+
+  return {
+    data: rows.map((row) => ({
+      timestamp: row.timestamp.toISOString(),
+      document_id: row.documentId,
+      dataroom_id: row.dataroomId,
+      view_id: row.viewId,
+      page_number: row.pageNumber,
+      version_number: row.versionNumber,
+      href: row.href,
+    })),
+  };
+}`,
+  ],
+  [
+    `    const data = await getClickEventsByView({
+      document_id: id,
+      view_id: viewId,
+    });`,
+    `    let data;
+    try {
+      data = await getClickEventsByView({
+        document_id: id,
+        view_id: viewId,
+      });
+    } catch (error) {
+      console.error("Failed to get Tinybird click events for view", viewId, error);
+      data = await getStoredClickEventsByView({
+        documentId: id,
+        viewId,
+      });
+    }`,
   ],
 ]);
 
@@ -1476,6 +1624,104 @@ async function getStoredDocumentStats({
         duration = fallbackStats.duration;
         totalDocumentDuration = fallbackStats.totalDocumentDuration;
       }`,
+  ],
+]);
+
+replaceInFile("lib/utils/geo.ts", [
+  [
+    `export function getGeoData(headers: {
+  [key: string]: string | string[] | undefined;
+}): Geo {
+  return {
+    city: Array.isArray(headers["x-vercel-ip-city"])
+      ? headers["x-vercel-ip-city"][0]
+      : headers["x-vercel-ip-city"],
+    region: Array.isArray(headers["x-vercel-ip-region"])
+      ? headers["x-vercel-ip-region"][0]
+      : headers["x-vercel-ip-region"],
+    country: Array.isArray(headers["x-vercel-ip-country"])
+      ? headers["x-vercel-ip-country"][0]
+      : headers["x-vercel-ip-country"],
+    latitude: Array.isArray(headers["x-vercel-ip-latitude"])
+      ? headers["x-vercel-ip-latitude"][0]
+      : headers["x-vercel-ip-latitude"],
+    longitude: Array.isArray(headers["x-vercel-ip-longitude"])
+      ? headers["x-vercel-ip-longitude"][0]
+      : headers["x-vercel-ip-longitude"],
+  };
+}`,
+    `function getHeader(
+  headers: { [key: string]: string | string[] | undefined },
+  key: string,
+) {
+  const value = headers[key];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export function getGeoData(headers: {
+  [key: string]: string | string[] | undefined;
+}): Geo {
+  return {
+    city: getHeader(headers, "x-vercel-ip-city"),
+    region: getHeader(headers, "x-vercel-ip-region"),
+    country:
+      getHeader(headers, "x-vercel-ip-country") ||
+      getHeader(headers, "cf-ipcountry"),
+    latitude: getHeader(headers, "x-vercel-ip-latitude"),
+    longitude: getHeader(headers, "x-vercel-ip-longitude"),
+  };
+}`,
+  ],
+  [
+    `export const LOCALHOST_GEO_DATA = {
+  continent: "Europe",
+  city: "Munich",
+  region: "BY",
+  country: "DE",
+  latitude: "48.137154",
+  longitude: "11.576124",
+};`,
+    `export const LOCALHOST_GEO_DATA = {
+  continent: "Unknown",
+  city: "Unknown",
+  region: "Unknown",
+  country: "Unknown",
+  latitude: "Unknown",
+  longitude: "Unknown",
+};`,
+  ],
+]);
+
+replaceInFile("lib/tracking/record-link-view.ts", [
+  [
+    `  const ip = process.env.VERCEL === "1" ? ipAddress(req) : LOCALHOST_IP;`,
+    `  const forwardedIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  const ip =
+    (process.env.VERCEL === "1" ? ipAddress(req) : null) ||
+    req.headers.get("cf-connecting-ip") ||
+    req.headers.get("x-real-ip") ||
+    forwardedIp ||
+    LOCALHOST_IP;`,
+  ],
+  [
+    `      : LOCALHOST_GEO_DATA;`,
+    `      : {
+          ...LOCALHOST_GEO_DATA,
+          country:
+            req.headers.get("cf-ipcountry") || LOCALHOST_GEO_DATA.country,
+        };`,
+  ],
+  [
+    `  const geo =
+    process.env.VERCEL === "1" ? geolocation(req) : LOCALHOST_GEO_DATA;`,
+    `  const geo =
+    process.env.VERCEL === "1"
+      ? geolocation(req)
+      : {
+          ...LOCALHOST_GEO_DATA,
+          country:
+            req.headers.get("cf-ipcountry") || LOCALHOST_GEO_DATA.country,
+        };`,
   ],
 ]);
 
