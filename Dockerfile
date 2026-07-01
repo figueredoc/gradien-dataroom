@@ -1706,6 +1706,15 @@ async function getStoredViewStats({
   ],
 ]);
 
+fs.writeFileSync(
+  "components/view/powered-by.tsx",
+  `export const PoweredBy = ({ linkId }: { linkId: string }) => {
+  void linkId;
+  return null;
+};
+`,
+);
+
 replaceInFile("components/visitors/visitor-chart.tsx", [
   [
     `import BarChartComponent from "@/components/charts/bar-chart";`,
