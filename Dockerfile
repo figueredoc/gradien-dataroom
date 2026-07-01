@@ -1872,7 +1872,7 @@ export function getGeoData(headers: {
 replaceInFile("lib/tracking/record-link-view.ts", [
   [
     `  const ip = process.env.VERCEL === "1" ? ipAddress(req) : LOCALHOST_IP;`,
-    `  const ip = getPublicIp(req);`,
+    `  const ip = getIpAddress(req.headers);`,
   ],
   [
     `      : LOCALHOST_GEO_DATA;`,
@@ -2018,8 +2018,13 @@ replaceInFile("lib/auth/dataroom-auth.ts", [
 
 replaceInFile("lib/tracking/record-link-view.ts", [
   [
+    `import { geolocation, ipAddress } from "@vercel/functions";`,
+    `import { geolocation } from "@vercel/functions";`,
+  ],
+  [
     `import { LOCALHOST_GEO_DATA, LOCALHOST_IP } from "../utils/geo";`,
     `import { LOCALHOST_GEO_DATA, LOCALHOST_IP } from "../utils/geo";
+import { getIpAddress } from "../utils/ip";
 
 function isPublicIp(ip?: string | null) {
   const value = normalizeIp(ip);
@@ -2051,65 +2056,58 @@ function normalizeIp(ip?: string | null) {
   return value;
 }
 
-function getPublicIp(req: NextRequest) {
-  const forwarded = req.headers.get("forwarded");
-  const forwardedFor =
-    forwarded
-      ?.split(",")
-      .flatMap((part) => part.split(";"))
-      .map((part) => part.trim())
-      .find((part) => part.toLowerCase().startsWith("for=")) || null;
-  const candidates = [
-    process.env.VERCEL === "1" ? ipAddress(req) : null,
-    req.headers.get("cf-connecting-ip"),
-    req.headers.get("true-client-ip"),
-    req.headers.get("x-real-ip"),
-    req.headers.get("x-client-ip"),
-    forwardedFor,
-    req.headers.get("x-forwarded-for"),
-  ].flatMap((value) => (value ? value.split(",") : []));
-
-  return candidates.map(normalizeIp).find(isPublicIp) || LOCALHOST_IP;
-}
-
 async function lookupGeo(ip?: string | null) {
   const publicIp = normalizeIp(ip);
   if (!isPublicIp(publicIp)) return null;
   if ((process.env.IP_GEOLOCATION_PROVIDER || "ipapi") !== "ipapi") return null;
 
   const apiKey = process.env.IPAPI_API_KEY;
-  const url = apiKey
-    ? \`https://ipapi.co/\${encodeURIComponent(publicIp!)}/json/?key=\${apiKey}\`
-    : \`https://ipapi.co/\${encodeURIComponent(publicIp!)}/json/\`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1200);
+  const encodedIp = encodeURIComponent(publicIp!);
+  const urls = [
+    apiKey ? \`https://ipapi.co/\${encodedIp}/json/?key=\${apiKey}\` : null,
+    \`https://ipapi.co/\${encodedIp}/json/\`,
+  ].filter(Boolean) as string[];
 
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) return null;
-    const data = await response.json();
-    if (data.error) return null;
+  for (const url of urls) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
 
-    return {
-      continent: data.continent_code || LOCALHOST_GEO_DATA.continent,
-      country:
-        data.country_code || data.country_name || LOCALHOST_GEO_DATA.country,
-      region: data.region_code || data.region || LOCALHOST_GEO_DATA.region,
-      city: data.city || LOCALHOST_GEO_DATA.city,
-      latitude:
-        data.latitude != null
-          ? String(data.latitude)
-          : LOCALHOST_GEO_DATA.latitude,
-      longitude:
-        data.longitude != null
-          ? String(data.longitude)
-          : LOCALHOST_GEO_DATA.longitude,
-    };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": "gradien-dataroom/1.0" },
+        signal: controller.signal,
+      });
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (data.error) continue;
+
+      const country =
+        data.country_code || data.country || data.country_name || LOCALHOST_GEO_DATA.country;
+
+      if (!country || country === LOCALHOST_GEO_DATA.country) continue;
+
+      return {
+        continent: data.continent_code || LOCALHOST_GEO_DATA.continent,
+        country,
+        region: data.region_code || data.region || LOCALHOST_GEO_DATA.region,
+        city: data.city || LOCALHOST_GEO_DATA.city,
+        latitude:
+          data.latitude != null
+            ? String(data.latitude)
+            : LOCALHOST_GEO_DATA.latitude,
+        longitude:
+          data.longitude != null
+            ? String(data.longitude)
+            : LOCALHOST_GEO_DATA.longitude,
+      };
+    } catch {
+      continue;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
+
+  return null;
 }`,
   ],
   [
@@ -2145,6 +2143,30 @@ async function lookupGeo(ip?: string | null) {
       : fallbackGeoResult.continent;
   const region =
     process.env.VERCEL === "1" ? geolocation(req).countryRegion : fallbackGeoResult.region;`,
+  ],
+]);
+
+replaceInFile("pages/api/jobs/send-notification.ts", [
+  [
+    `  const locationString =
+    locationData.country === "US"
+      ? \`\${locationData.city}, \${locationData.region}, \${locationData.country}\`
+      : \`\${locationData.city}, \${locationData.country}\`;`,
+    `  const locationParts =
+    locationData.country === "US"
+      ? [locationData.city, locationData.region, locationData.country]
+      : [locationData.city, locationData.country];
+  const locationString = locationParts
+    .filter((part) => part && part !== "Unknown")
+    .join(", ");`,
+  ],
+  [
+    `        locationString: includeLocation ? locationString : undefined,`,
+    `        locationString: includeLocation && locationString ? locationString : undefined,`,
+  ],
+  [
+    `        locationString: includeLocation ? locationString : undefined,`,
+    `        locationString: includeLocation && locationString ? locationString : undefined,`,
   ],
 ]);
 
