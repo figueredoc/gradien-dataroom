@@ -1496,6 +1496,11 @@ replaceAllInFile("lib/tinybird/pipes.ts", [
   ['pipe: "get_page_duration_per_view__v5"', 'pipe: "get_page_duration_per_view__v4"'],
 ]);
 
+replaceAllInFile("pages/404.tsx", [
+  ['href="/"', 'href="https://gradien.ai/?utm_source=dataroom"'],
+  ['Go back home <span aria-hidden="true"> &rarr;</span>', 'Go back to Gradien <span aria-hidden="true"> &rarr;</span>'],
+]);
+
 const awsClientPath = "lib/files/aws-client.ts";
 let awsClient = fs.readFileSync(awsClientPath, "utf8");
 awsClient = awsClient.replaceAll(
