@@ -1627,11 +1627,122 @@ async function getStoredDocumentStats({
   ],
 ]);
 
+replaceInFile("pages/api/teams/[teamId]/documents/[id]/views/[viewId]/stats.ts", [
+  [
+    `import { errorhandler } from "@/lib/errorHandler";`,
+    `import { errorhandler } from "@/lib/errorHandler";
+import prisma from "@/lib/prisma";`,
+  ],
+  [
+    `import { CustomUser } from "@/lib/types";`,
+    `import { CustomUser } from "@/lib/types";
+
+async function getStoredViewStats({
+  documentId,
+  viewId,
+}: {
+  documentId: string;
+  viewId: string;
+}) {
+  const rows = await prisma.pageViewEvent.groupBy({
+    by: ["pageNumber"],
+    where: {
+      documentId,
+      viewId,
+    },
+    _sum: { duration: true },
+  });
+
+  const data = rows
+    .map((row) => ({
+      pageNumber: row.pageNumber,
+      sum_duration: row._sum.duration || 0,
+    }))
+    .sort((a, b) => Number(a.pageNumber) - Number(b.pageNumber));
+
+  return {
+    duration: { data },
+    total_duration: data.reduce(
+      (totalDuration, page) => totalDuration + page.sum_duration,
+      0,
+    ),
+  };
+}`,
+  ],
+  [
+    `      const duration = await getViewPageDuration({
+        documentId: docId,
+        viewId: viewId,
+        since: 0,
+      });
+
+      const total_duration = duration.data.reduce(
+        (totalDuration, data) => totalDuration + data.sum_duration,
+        0,
+      );
+
+      const stats = { duration, total_duration };`,
+    `      let stats;
+      try {
+        const duration = await getViewPageDuration({
+          documentId: docId,
+          viewId: viewId,
+          since: 0,
+        });
+
+        const total_duration = duration.data.reduce(
+          (totalDuration, data) => totalDuration + data.sum_duration,
+          0,
+        );
+
+        stats = { duration, total_duration };
+      } catch (error) {
+        console.error("Failed to get Tinybird visitor stats for view", viewId, error);
+        stats = await getStoredViewStats({
+          documentId: docId,
+          viewId,
+        });
+      }`,
+  ],
+]);
+
 replaceInFile("components/visitors/visitor-chart.tsx", [
   [
     `import BarChartComponent from "@/components/charts/bar-chart";`,
     `import BarChartComponent from "@/components/charts/bar-chart";
 import { timeFormatter } from "@/components/charts/utils";`,
+  ],
+  [
+    `  let durationData = Array.from({ length: totalPages }, (_, i) => ({
+    pageNumber: (i + 1).toString(),
+    sum_duration: 0,
+  }));
+
+  const swrData = stats?.duration;
+
+  durationData = durationData.map((item) => {
+    const swrItem = swrData.data.find(
+      (data) => data.pageNumber === item.pageNumber,
+    );
+    return swrItem ? swrItem : item;
+  });`,
+    `  const swrData = stats?.duration;
+  const trackedPages = swrData.data
+    .map((data) => Number(data.pageNumber))
+    .filter((pageNumber) => Number.isFinite(pageNumber));
+  const pageCount = Math.max(totalPages, ...trackedPages, 0);
+
+  let durationData = Array.from({ length: pageCount }, (_, i) => ({
+    pageNumber: (i + 1).toString(),
+    sum_duration: 0,
+  }));
+
+  durationData = durationData.map((item) => {
+    const swrItem = swrData.data.find(
+      (data) => data.pageNumber === item.pageNumber,
+    );
+    return swrItem ? swrItem : item;
+  });`,
   ],
   [
     `      <BarChartComponent
