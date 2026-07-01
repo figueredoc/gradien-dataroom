@@ -1892,6 +1892,130 @@ replaceInFile("lib/tracking/record-link-view.ts", [
   ],
 ]);
 
+replaceInFile("lib/utils/ip.ts", [
+  [
+    `export function getIpAddress(headers: {
+  [key: string]: string | string[] | undefined;
+}): string {
+  if (typeof headers["x-forwarded-for"] === "string") {
+    return (headers["x-forwarded-for"] ?? "127.0.0.1").split(",")[0];
+  }
+  return "127.0.0.1";
+}
+`,
+    `type HeaderSource =
+  | Headers
+  | {
+      [key: string]: string | string[] | undefined;
+    };
+
+const LOCALHOST_IP = "127.0.0.1";
+
+function getHeader(headers: HeaderSource, name: string) {
+  if (typeof (headers as Headers).get === "function") {
+    return (headers as Headers).get(name);
+  }
+
+  const value =
+    (headers as Record<string, string | string[] | undefined>)[name] ||
+    (headers as Record<string, string | string[] | undefined>)[
+      name.toLowerCase()
+    ];
+
+  return Array.isArray(value) ? value[0] : value || null;
+}
+
+function normalizeIp(ip?: string | null) {
+  if (!ip) return null;
+  let value = ip.trim().replace(/^"|"$/g, "");
+  if (!value) return null;
+
+  if (value.startsWith("for=")) {
+    value = value.slice(4);
+  }
+  if (value.startsWith("[") && value.includes("]")) {
+    value = value.slice(1, value.indexOf("]"));
+  }
+  if (value.startsWith("::ffff:")) {
+    value = value.slice(7);
+  }
+  if (/^\\d+\\.\\d+\\.\\d+\\.\\d+:\\d+$/.test(value)) {
+    value = value.split(":")[0];
+  }
+
+  return value;
+}
+
+function isPublicIp(ip?: string | null) {
+  const value = normalizeIp(ip);
+  if (!value || value === LOCALHOST_IP || value === "::1") return false;
+  if (value.startsWith("10.") || value.startsWith("192.168.")) return false;
+  if (/^172\\.(1[6-9]|2\\d|3[0-1])\\./.test(value)) return false;
+  if (value.startsWith("fc") || value.startsWith("fd")) return false;
+  return true;
+}
+
+export function getIpAddress(headers: HeaderSource): string {
+  const forwarded = getHeader(headers, "forwarded");
+  const forwardedFor =
+    forwarded
+      ?.split(",")
+      .flatMap((part) => part.split(";"))
+      .map((part) => part.trim())
+      .find((part) => part.toLowerCase().startsWith("for=")) || null;
+
+  const candidates = [
+    getHeader(headers, "cf-connecting-ip"),
+    getHeader(headers, "true-client-ip"),
+    getHeader(headers, "x-real-ip"),
+    getHeader(headers, "x-client-ip"),
+    forwardedFor,
+    getHeader(headers, "x-forwarded-for"),
+  ].flatMap((value) => (value ? value.split(",") : []));
+
+  return candidates.map(normalizeIp).find(isPublicIp) || LOCALHOST_IP;
+}
+`,
+  ],
+]);
+
+for (const filePath of ["app/api/views/route.ts", "app/api/views-dataroom/route.ts"]) {
+  replaceInFile(filePath, [
+    [
+      `import { ipAddress, waitUntil } from "@vercel/functions";`,
+      `import { waitUntil } from "@vercel/functions";`,
+    ],
+    [
+      `import { LOCALHOST_IP } from "@/lib/utils/geo";`,
+      `import { getIpAddress } from "@/lib/utils/ip";`,
+    ],
+  ]);
+
+  replaceAllInFile(filePath, [
+    [`ipAddress(request) ?? LOCALHOST_IP`, `getIpAddress(request.headers)`],
+    [`ipAddress(request)`, `getIpAddress(request.headers)`],
+    [`? (getIpAddress(request.headers))`, `? getIpAddress(request.headers)`],
+    [
+      `process.env.VERCEL === "1"
+              ? getIpAddress(request.headers)
+              : LOCALHOST_IP`,
+      `getIpAddress(request.headers)`,
+    ],
+  ]);
+}
+
+replaceInFile("lib/auth/dataroom-auth.ts", [
+  [
+    `import { ipAddress } from "@vercel/functions";
+`,
+    ``,
+  ],
+  [
+    `    const ipAddressValue = ipAddress(request) ?? LOCALHOST_IP;`,
+    `    const ipAddressValue = getIpAddress(request.headers);`,
+  ],
+]);
+
 replaceInFile("lib/tracking/record-link-view.ts", [
   [
     `import { LOCALHOST_GEO_DATA, LOCALHOST_IP } from "../utils/geo";`,
