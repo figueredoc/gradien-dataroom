@@ -1705,11 +1705,7 @@ replaceInFile("lib/tracking/record-link-view.ts", [
   ],
   [
     `      : LOCALHOST_GEO_DATA;`,
-    `      : {
-          ...LOCALHOST_GEO_DATA,
-          country:
-            req.headers.get("cf-ipcountry") || LOCALHOST_GEO_DATA.country,
-        };`,
+    `      : LOCALHOST_GEO_DATA;`,
   ],
   [
     `  const geo =
