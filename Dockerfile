@@ -1850,13 +1850,7 @@ export function getGeoData(headers: {
 replaceInFile("lib/tracking/record-link-view.ts", [
   [
     `  const ip = process.env.VERCEL === "1" ? ipAddress(req) : LOCALHOST_IP;`,
-    `  const forwardedIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  const ip =
-    (process.env.VERCEL === "1" ? ipAddress(req) : null) ||
-    req.headers.get("cf-connecting-ip") ||
-    req.headers.get("x-real-ip") ||
-    forwardedIp ||
-    LOCALHOST_IP;`,
+    `  const ip = getPublicIp(req);`,
   ],
   [
     `      : LOCALHOST_GEO_DATA;`,
@@ -1882,21 +1876,65 @@ replaceInFile("lib/tracking/record-link-view.ts", [
     `import { LOCALHOST_GEO_DATA, LOCALHOST_IP } from "../utils/geo";
 
 function isPublicIp(ip?: string | null) {
-  if (!ip || ip === LOCALHOST_IP) return false;
-  if (ip.startsWith("10.") || ip.startsWith("192.168.")) return false;
-  if (/^172\\.(1[6-9]|2\\d|3[0-1])\\./.test(ip)) return false;
-  if (ip === "::1" || ip.startsWith("fc") || ip.startsWith("fd")) return false;
+  const value = normalizeIp(ip);
+  if (!value || value === LOCALHOST_IP || value === "127.0.0.1") return false;
+  if (value.startsWith("10.") || value.startsWith("192.168.")) return false;
+  if (/^172\\.(1[6-9]|2\\d|3[0-1])\\./.test(value)) return false;
+  if (value === "::1" || value.startsWith("fc") || value.startsWith("fd")) return false;
   return true;
 }
 
+function normalizeIp(ip?: string | null) {
+  if (!ip) return null;
+  let value = ip.trim().replace(/^"|"$/g, "");
+  if (!value) return null;
+
+  if (value.startsWith("for=")) {
+    value = value.slice(4);
+  }
+  if (value.startsWith("[") && value.includes("]")) {
+    value = value.slice(1, value.indexOf("]"));
+  }
+  if (value.startsWith("::ffff:")) {
+    value = value.slice(7);
+  }
+  if (/^\\d+\\.\\d+\\.\\d+\\.\\d+:\\d+$/.test(value)) {
+    value = value.split(":")[0];
+  }
+
+  return value;
+}
+
+function getPublicIp(req: NextRequest) {
+  const forwarded = req.headers.get("forwarded");
+  const forwardedFor =
+    forwarded
+      ?.split(",")
+      .flatMap((part) => part.split(";"))
+      .map((part) => part.trim())
+      .find((part) => part.toLowerCase().startsWith("for=")) || null;
+  const candidates = [
+    process.env.VERCEL === "1" ? ipAddress(req) : null,
+    req.headers.get("cf-connecting-ip"),
+    req.headers.get("true-client-ip"),
+    req.headers.get("x-real-ip"),
+    req.headers.get("x-client-ip"),
+    forwardedFor,
+    req.headers.get("x-forwarded-for"),
+  ].flatMap((value) => (value ? value.split(",") : []));
+
+  return candidates.map(normalizeIp).find(isPublicIp) || LOCALHOST_IP;
+}
+
 async function lookupGeo(ip?: string | null) {
-  if (!isPublicIp(ip)) return null;
-  if (process.env.IP_GEOLOCATION_PROVIDER !== "ipapi") return null;
+  const publicIp = normalizeIp(ip);
+  if (!isPublicIp(publicIp)) return null;
+  if ((process.env.IP_GEOLOCATION_PROVIDER || "ipapi") !== "ipapi") return null;
 
   const apiKey = process.env.IPAPI_API_KEY;
   const url = apiKey
-    ? \`https://ipapi.co/\${ip}/json/?key=\${apiKey}\`
-    : \`https://ipapi.co/\${ip}/json/\`;
+    ? \`https://ipapi.co/\${encodeURIComponent(publicIp!)}/json/?key=\${apiKey}\`
+    : \`https://ipapi.co/\${encodeURIComponent(publicIp!)}/json/\`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1200);
 
@@ -1961,6 +1999,206 @@ async function lookupGeo(ip?: string | null) {
       : fallbackGeoResult.continent;
   const region =
     process.env.VERCEL === "1" ? geolocation(req).countryRegion : fallbackGeoResult.region;`,
+  ],
+]);
+
+replaceInFile("pages/api/analytics/index.ts", [
+  [
+    `import {
+  getTotalDocumentDuration,
+  getTotalLinkDuration,
+  getTotalViewerDuration,
+  getViewPageDuration,
+} from "@/lib/tinybird/pipes";`,
+    ``,
+  ],
+  [
+    `const INTERVALS = {
+  "24h": 24 * 60 * 60 * 1000, // 24 hours in ms
+  "7d": 7 * 24 * 60 * 60 * 1000, // 7 days in ms
+  "30d": 30 * 24 * 60 * 60 * 1000, // 30 days in ms
+} as const;`,
+    `async function getStoredDurationSum(where: any) {
+  const duration = await prisma.pageViewEvent.aggregate({
+    where,
+    _sum: { duration: true },
+  });
+
+  return duration._sum.duration || 0;
+}
+
+async function getStoredPageDurations(where: any) {
+  const rows = await prisma.pageViewEvent.groupBy({
+    by: ["pageNumber"],
+    where,
+    _sum: { duration: true },
+  });
+
+  return {
+    data: rows
+      .map((row) => ({
+        pageNumber: row.pageNumber,
+        sum_duration: row._sum.duration || 0,
+      }))
+      .sort((a, b) => Number(a.pageNumber) - Number(b.pageNumber)),
+  };
+}`,
+  ],
+  [
+    `    let since: number;
+
+    if (interval === "custom") {
+      const startTimestamp = startStr ? new Date(startStr).getTime() : NaN;
+
+      if (isNaN(startTimestamp)) {
+        since = Date.now();
+      } else {
+        since = startTimestamp;
+      }
+    } else {
+      since = Date.now() - INTERVALS[interval];
+    }
+
+`,
+    ``,
+  ],
+  [
+    `            let avgDuration = "0s";
+
+            if (link.documentId) {
+              try {
+                const durationData = await getTotalLinkDuration({
+                  linkId: link.id,
+                  documentId: link.documentId,
+                  excludedViewIds: "", // Include all views
+                  since,
+                  until: endStr
+                    ? new Date(endStr).getTime()
+                    : new Date().getTime(),
+                });
+
+                if (durationData.data && durationData.data[0]) {
+                  const totalDuration = durationData.data[0].sum_duration;
+                  const viewCount = durationData.data[0].view_count;
+                  const avgDurationMs = totalDuration / viewCount;
+                  avgDuration = durationFormat(avgDurationMs);
+                }
+              } catch (error) {
+                console.error("Error fetching Tinybird data:", error);
+              }
+            }`,
+    `            let avgDuration = "0s";
+
+            if (link.documentId && link._count.views) {
+              const totalDuration = await getStoredDurationSum({
+                linkId: link.id,
+                documentId: link.documentId,
+                createdAt: intervalFilter,
+              });
+              avgDuration = durationFormat(totalDuration / link._count.views);
+            }`,
+  ],
+  [
+    `            let avgDuration = "0s";
+            try {
+              const durationData = await getTotalDocumentDuration({
+                documentId: doc.id,
+                excludedLinkIds: "", // Include all links
+                excludedViewIds: "", // Include all views
+                since,
+                until: endStr
+                  ? new Date(endStr).getTime()
+                  : new Date().getTime(),
+              });
+
+              if (durationData.data && durationData.data[0]) {
+                const totalDuration = durationData.data[0].sum_duration;
+                const avgDurationMs = totalDuration / doc._count.views;
+                avgDuration = durationFormat(avgDurationMs);
+              }
+            } catch (error) {
+              console.error("Error fetching Tinybird data:", error);
+            }`,
+    `            let avgDuration = "0s";
+            if (doc._count.views) {
+              const totalDuration = await getStoredDurationSum({
+                documentId: doc.id,
+                createdAt: intervalFilter,
+              });
+              avgDuration = durationFormat(totalDuration / doc._count.views);
+            }`,
+  ],
+  [
+    `            let totalDuration = 0;
+            try {
+              const viewIds = viewer.views.map((view) => view.id).join(",");
+              const durationData = await getTotalViewerDuration({
+                viewIds,
+                since,
+                until: endStr
+                  ? new Date(endStr).getTime()
+                  : new Date().getTime(),
+              });
+
+              if (durationData.data && durationData.data[0]) {
+                totalDuration = durationData.data[0].sum_duration;
+              }
+            } catch (error) {
+              console.error("Error fetching Tinybird data:", error);
+            }`,
+    `            let totalDuration = 0;
+            const viewIds = viewer.views.map((view) => view.id);
+            if (viewIds.length) {
+              totalDuration = await getStoredDurationSum({
+                viewId: { in: viewIds },
+                createdAt: intervalFilter,
+              });
+            }`,
+  ],
+  [
+    `              try {
+                const pageData = await getViewPageDuration({
+                  documentId: view.document.id,
+                  viewId: view.id,
+                  since,
+                  until: endStr
+                    ? new Date(endStr).getTime()
+                    : new Date().getTime(),
+                });
+
+                if (pageData.data && pageData.data.length > 0) {
+                  // Calculate total duration from all pages
+                  totalDuration = pageData.data.reduce(
+                    (sum, page) => sum + page.sum_duration,
+                    0,
+                  );
+
+                  // Calculate completion rate based on pages with any duration
+                  const numPages = view.document.versions[0]?.numPages || 0;
+                  completionRate = numPages
+                    ? (pageData.data.length / numPages) * 100
+                    : 0;
+                }
+              } catch (error) {
+                console.error("Error fetching Tinybird data:", error);
+              }`,
+    `              const pageData = await getStoredPageDurations({
+                documentId: view.document.id,
+                viewId: view.id,
+                createdAt: intervalFilter,
+              });
+
+              if (pageData.data.length > 0) {
+                totalDuration = pageData.data.reduce(
+                  (sum, page) => sum + page.sum_duration,
+                  0,
+                );
+
+                const numPages = view.document.versions[0]?.numPages || 0;
+                completionRate = numPages
+                  ? (pageData.data.length / numPages) * 100
+                  : 0;
+              }`,
   ],
 ]);
 
