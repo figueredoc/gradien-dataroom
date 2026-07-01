@@ -1052,6 +1052,92 @@ replaceInFile("pages/api/record_view.ts", [
   ],
 ]);
 
+const schemaPath = "prisma/schema/schema.prisma";
+let schema = fs.readFileSync(schemaPath, "utf8");
+if (!schema.includes("model PageViewEvent")) {
+  schema += `
+
+model PageViewEvent {
+  id            String   @id
+  linkId        String
+  documentId    String
+  viewId        String
+  dataroomId    String?
+  versionNumber Int      @default(1)
+  time          BigInt
+  duration      Int
+  pageNumber    String
+  createdAt     DateTime @default(now())
+
+  @@index([linkId])
+  @@index([documentId])
+  @@index([viewId])
+  @@index([documentId, viewId])
+  @@index([time])
+}
+`;
+  fs.writeFileSync(schemaPath, schema);
+}
+
+const pageViewMigrationDir = "prisma/migrations/20260630000000_add_page_view_events";
+fs.mkdirSync(pageViewMigrationDir, { recursive: true });
+fs.writeFileSync(
+  `${pageViewMigrationDir}/migration.sql`,
+  `CREATE TABLE "PageViewEvent" (
+    "id" TEXT NOT NULL,
+    "linkId" TEXT NOT NULL,
+    "documentId" TEXT NOT NULL,
+    "viewId" TEXT NOT NULL,
+    "dataroomId" TEXT,
+    "versionNumber" INTEGER NOT NULL DEFAULT 1,
+    "time" BIGINT NOT NULL,
+    "duration" INTEGER NOT NULL,
+    "pageNumber" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PageViewEvent_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX "PageViewEvent_linkId_idx" ON "PageViewEvent"("linkId");
+CREATE INDEX "PageViewEvent_documentId_idx" ON "PageViewEvent"("documentId");
+CREATE INDEX "PageViewEvent_viewId_idx" ON "PageViewEvent"("viewId");
+CREATE INDEX "PageViewEvent_documentId_viewId_idx" ON "PageViewEvent"("documentId", "viewId");
+CREATE INDEX "PageViewEvent_time_idx" ON "PageViewEvent"("time");
+`,
+);
+
+replaceInFile("pages/api/record_view.ts", [
+  [
+    `import { publishPageView } from "@/lib/tinybird";`,
+    `import prisma from "@/lib/prisma";
+import { publishPageView } from "@/lib/tinybird";`,
+  ],
+  [
+    `  try {
+    await publishPageView(result.data);`,
+    `  try {
+    await prisma.pageViewEvent.create({
+      data: {
+        id: result.data.id,
+        linkId: result.data.linkId,
+        documentId: result.data.documentId,
+        viewId: result.data.viewId,
+        dataroomId: result.data.dataroomId || null,
+        versionNumber: result.data.versionNumber,
+        time: BigInt(result.data.time),
+        duration: result.data.duration,
+        pageNumber: result.data.pageNumber,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to store page view duration", result.data.id, error);
+  }
+
+  try {
+    await publishPageView(result.data);`,
+  ],
+]);
+
 replaceInFile("pages/api/links/[id]/visits.ts", [
   [
     `      const durationsPromises = limitedViews.map((view) => {
@@ -1077,6 +1163,58 @@ replaceInFile("pages/api/links/[id]/visits.ts", [
           }
         }),
       );`,
+  ],
+]);
+
+replaceInFile("pages/api/links/[id]/visits.ts", [
+  [
+    `import { log } from "@/lib/utils";`,
+    `import { log } from "@/lib/utils";
+
+import { authOptions } from "../../auth/[...nextauth]";
+
+type PageDuration = { pageNumber: string; sum_duration: number };
+
+async function getStoredViewPageDuration({
+  documentId,
+  viewId,
+}: {
+  documentId: string;
+  viewId: string;
+}) {
+  const rows = await prisma.pageViewEvent.groupBy({
+    by: ["pageNumber"],
+    where: { documentId, viewId },
+    _sum: { duration: true },
+  });
+
+  return {
+    data: rows
+      .map((row) => ({
+        pageNumber: row.pageNumber,
+        sum_duration: row._sum.duration || 0,
+      }))
+      .sort(
+        (a: PageDuration, b: PageDuration) =>
+          Number(a.pageNumber) - Number(b.pageNumber),
+      ),
+  };
+}`,
+  ],
+  [
+    `  };
+}
+
+import { authOptions } from "../../auth/[...nextauth]";`,
+    `  };
+}`,
+  ],
+  [
+    `            return { data: [] as { pageNumber: string; sum_duration: number }[] };`,
+    `            return getStoredViewPageDuration({
+              documentId: view.documentId!,
+              viewId: view.id,
+            });`,
   ],
 ]);
 
@@ -1143,6 +1281,48 @@ replaceInFile("pages/api/teams/[teamId]/documents/[id]/views/index.ts", [
   ],
 ]);
 
+replaceInFile("pages/api/teams/[teamId]/documents/[id]/views/index.ts", [
+  [
+    `import { log } from "@/lib/utils";`,
+    `import { log } from "@/lib/utils";
+
+type PageDuration = { pageNumber: string; sum_duration: number };
+
+async function getStoredViewPageDuration({
+  documentId,
+  viewId,
+}: {
+  documentId: string;
+  viewId: string;
+}) {
+  const rows = await prisma.pageViewEvent.groupBy({
+    by: ["pageNumber"],
+    where: { documentId, viewId },
+    _sum: { duration: true },
+  });
+
+  return {
+    data: rows
+      .map((row) => ({
+        pageNumber: row.pageNumber,
+        sum_duration: row._sum.duration || 0,
+      }))
+      .sort(
+        (a: PageDuration, b: PageDuration) =>
+          Number(a.pageNumber) - Number(b.pageNumber),
+      ),
+  };
+}`,
+  ],
+  [
+    `        return { data: [] as { pageNumber: string; sum_duration: number }[] };`,
+    `        return getStoredViewPageDuration({
+          documentId: document.id,
+          viewId: view.id,
+        });`,
+  ],
+]);
+
 replaceInFile("pages/api/teams/[teamId]/documents/[id]/stats.ts", [
   [
     `      const duration = await getTotalAvgPageDuration({
@@ -1206,6 +1386,96 @@ replaceInFile("pages/api/teams/[teamId]/documents/[id]/stats.ts", [
         groupedReactions,
         totalViews: filteredViews.length,
       };`,
+  ],
+]);
+
+replaceInFile("pages/api/teams/[teamId]/documents/[id]/stats.ts", [
+  [
+    `import { authOptions } from "../../../../auth/[...nextauth]";`,
+    `import { authOptions } from "../../../../auth/[...nextauth]";
+
+async function getStoredDocumentStats({
+  docId,
+  excludedViewIds,
+}: {
+  docId: string;
+  excludedViewIds: string[];
+}) {
+  const rows = await prisma.pageViewEvent.groupBy({
+    by: ["versionNumber", "pageNumber", "viewId"],
+    where: {
+      documentId: docId,
+      viewId: { notIn: excludedViewIds },
+    },
+    _sum: { duration: true },
+  });
+
+  const pageDurations = new Map<
+    string,
+    {
+      versionNumber: number;
+      pageNumber: string;
+      totalDuration: number;
+      viewCount: number;
+    }
+  >();
+
+  for (const row of rows) {
+    const key = \`\${row.versionNumber}:\${row.pageNumber}\`;
+    const current = pageDurations.get(key) || {
+      versionNumber: row.versionNumber,
+      pageNumber: row.pageNumber,
+      totalDuration: 0,
+      viewCount: 0,
+    };
+
+    current.totalDuration += row._sum.duration || 0;
+    current.viewCount += 1;
+    pageDurations.set(key, current);
+  }
+
+  return {
+    duration: {
+      data: Array.from(pageDurations.values())
+        .map((page) => ({
+          versionNumber: page.versionNumber,
+          pageNumber: page.pageNumber,
+          avg_duration: page.viewCount
+            ? page.totalDuration / page.viewCount
+            : 0,
+        }))
+        .sort((a, b) =>
+          a.versionNumber === b.versionNumber
+            ? Number(a.pageNumber) - Number(b.pageNumber)
+            : a.versionNumber - b.versionNumber,
+        ),
+    },
+    totalDocumentDuration: {
+      data: [
+        {
+          sum_duration: rows.reduce(
+            (total, row) => total + (row._sum.duration || 0),
+            0,
+          ),
+        },
+      ],
+    },
+  };
+}`,
+  ],
+  [
+    `      } catch (error) {
+        console.error("Failed to get Tinybird document stats", docId, error);
+      }`,
+    `      } catch (error) {
+        console.error("Failed to get Tinybird document stats", docId, error);
+        const fallbackStats = await getStoredDocumentStats({
+          docId,
+          excludedViewIds: allExcludedViews.map((view) => view.id),
+        });
+        duration = fallbackStats.duration;
+        totalDocumentDuration = fallbackStats.totalDocumentDuration;
+      }`,
   ],
 ]);
 
