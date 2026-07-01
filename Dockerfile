@@ -1715,6 +1715,28 @@ fs.writeFileSync(
 `,
 );
 
+replaceInFile("components/view/access-form/index.tsx", [
+  [
+    `            This document is securely shared with you using{" "}
+            <a
+              href="https://www.papermark.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-semibold"
+            >
+              Papermark
+            </a>`,
+    `            <a
+              href="https://gradien.ai/?utm_source=dataroom"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-semibold"
+            >
+              Gradien - AI infrastructure for autonomous organizations
+            </a>`,
+  ],
+]);
+
 replaceInFile("components/visitors/visitor-chart.tsx", [
   [
     `import BarChartComponent from "@/components/charts/bar-chart";`,
