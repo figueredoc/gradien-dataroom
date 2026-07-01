@@ -1627,6 +1627,41 @@ async function getStoredDocumentStats({
   ],
 ]);
 
+replaceInFile("components/visitors/visitor-chart.tsx", [
+  [
+    `import BarChartComponent from "@/components/charts/bar-chart";`,
+    `import BarChartComponent from "@/components/charts/bar-chart";
+import { timeFormatter } from "@/components/charts/utils";`,
+  ],
+  [
+    `      <BarChartComponent
+        data={durationData}
+        isSum={true}
+        versionNumber={versionNumber}
+      />
+    </div>`,
+    `      <BarChartComponent
+        data={durationData}
+        isSum={true}
+        versionNumber={versionNumber}
+      />
+      <div className="grid grid-cols-2 gap-2 px-2 pb-3 pt-2 text-xs text-muted-foreground sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+        {durationData.map((page) => (
+          <div
+            key={page.pageNumber}
+            className="flex items-center justify-between rounded-md border bg-background px-2 py-1"
+          >
+            <span>Slide {page.pageNumber}</span>
+            <span className="font-medium text-foreground">
+              {timeFormatter(page.sum_duration)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>`,
+  ],
+]);
+
 replaceInFile("lib/utils/geo.ts", [
   [
     `export function getGeoData(headers: {
