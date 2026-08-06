@@ -3855,6 +3855,78 @@ replaceAllInFile("ee/features/conversations/emails/components/conversation-team-
 replaceAllInFile("ee/features/billing/cancellation/emails/components/pause-resume-reminder.tsx", [
   ["Papermark, Inc.", "Gradien Inc."],
 ]);
+// =====================================================================
+// Gradien round 3: remove the Backtrace Capital testimonial and the
+// "bootstrapped and open-source business" paragraph, per request.
+// =====================================================================
+
+for (const filePath of [
+  "app/(auth)/login/page-client.tsx",
+  "app/(auth)/verify/page.tsx",
+]) {
+  replaceInFile(filePath, [
+    [
+      `            {/* Testimonial top 2/3 */}
+            <div
+              className="flex w-full flex-col items-center justify-center"
+              style={{ height: "66.6666%" }}
+            >
+              {/* Image container */}
+              <div className="mb-4 h-64 w-80">
+                <img
+                  className="h-full w-full rounded-2xl object-cover shadow-2xl"
+                  src="/_static/testimonials/backtrace.jpeg"
+                  alt="Backtrace Capital"
+                />
+              </div>
+              {/* Text content */}
+              <div className="max-w-xl text-center">
+                <blockquote className="text-balance font-normal leading-8 text-white sm:text-xl sm:leading-9">
+                  <p>
+                    &quot;We raised our €30M Fund with Papermark Data Rooms.
+                    Love the customization, security and ease of use.&quot;
+                  </p>
+                </blockquote>
+                <figcaption className="mt-4">
+                  <div className="text-balance font-normal text-white">
+                    Michael Münnix
+                  </div>
+                  <div className="text-balance font-light text-gray-400">
+                    Partner, Backtrace Capital
+                  </div>
+                </figcaption>
+              </div>
+            </div>
+            {/* White block with logos bottom 1/3, full width/height */}
+            <div
+              className="absolute bottom-0 left-0 flex w-full flex-col items-center justify-center bg-white"
+              style={{ height: "33.3333%" }}
+            >`,
+      `            {/* Trusted-by block, full height now that the testimonial is gone */}
+            <div className="flex h-full w-full flex-col items-center justify-center bg-white">`,
+    ],
+  ]);
+}
+
+replaceInFile("components/emails/upgrade-plan.tsx", [
+  [
+    `            <Text className="text-sm leading-6 text-black">
+              As you might already know, we are a bootstrapped and{" "}
+              <Link
+                href="https://github.com/mfts/papermark"
+                target="_blank"
+                className="font-medium text-emerald-500 no-underline"
+              >
+                open-source
+              </Link>{" "}
+              business. Your support means the world to us and helps us continue
+              to build and improve Papermark.
+            </Text>
+`,
+    ``,
+  ],
+]);
+
 NODE
 
 FROM base AS deps
