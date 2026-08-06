@@ -2906,6 +2906,591 @@ for (const configFile of ["next.config.js", "next.config.mjs"]) {
 fs.writeFileSync(putFilePath, putFile);
 fs.writeFileSync(resendPath, resend);
 fs.writeFileSync(utilsPath, utils);
+
+// =====================================================================
+// Gradien bug-fix patch set (analytics, downloads, Excel viewer, branding)
+// =====================================================================
+
+const GRADIEN_LOGO_URL =
+  "https://kneaohyf9axaxfza.public.blob.vercel-storage.com/logo-RTEPricFShguLVqY1LGEXgdY91GOr3.png";
+
+// ---------------------------------------------------------------------
+// 1. Unlock every plan-gated feature for this self-hosted, single-tenant
+//    deployment (dataroom analytics tab, per-document download
+//    permissions, visitor user-agent detail, etc.) by making every team
+//    default to — and backfilling existing teams to — the top plan.
+// ---------------------------------------------------------------------
+const teamSchemaPath = "prisma/schema/team.prisma";
+let teamSchema = fs.readFileSync(teamSchemaPath, "utf8");
+teamSchema = teamSchema.replace(
+  'plan           String    @default("free")',
+  'plan           String    @default("datarooms-plus")',
+);
+fs.writeFileSync(teamSchemaPath, teamSchema);
+
+const fullPlanMigrationDir =
+  "prisma/migrations/20260806100000_unlock_full_plan_for_selfhosted";
+fs.mkdirSync(fullPlanMigrationDir, { recursive: true });
+fs.writeFileSync(
+  `${fullPlanMigrationDir}/migration.sql`,
+  `ALTER TABLE "Team" ALTER COLUMN "plan" SET DEFAULT 'datarooms-plus';
+
+UPDATE "Team" SET "plan" = 'datarooms-plus';
+`,
+);
+
+// ---------------------------------------------------------------------
+// 2. Dataroom analytics: the dataroom-level stats endpoint called
+//    Tinybird directly with no fallback, unlike every other analytics
+//    endpoint in this fork — so it 500'd whenever Tinybird isn't
+//    configured, and the whole Analytics tab rendered nothing.
+// ---------------------------------------------------------------------
+replaceInFile("pages/api/teams/[teamId]/datarooms/[id]/stats.ts", [
+  [
+    `import { authOptions } from "../../../../auth/[...nextauth]";`,
+    `import { authOptions } from "../../../../auth/[...nextauth]";
+
+async function getStoredDataroomDuration({
+  dataroomId,
+  excludedViewIds,
+}: {
+  dataroomId: string;
+  excludedViewIds: string[];
+}) {
+  const rows = await prisma.pageViewEvent.groupBy({
+    by: ["viewId"],
+    where: {
+      dataroomId,
+      viewId: { notIn: excludedViewIds },
+    },
+    _sum: { duration: true },
+  });
+
+  return {
+    data: rows.map((row) => ({
+      viewId: row.viewId,
+      sum_duration: row._sum.duration || 0,
+    })),
+  };
+}`,
+  ],
+  [
+    `      const duration = await getTotalDataroomDuration({
+        dataroomId: dataroomId,
+        excludedLinkIds: [],
+        excludedViewIds: excludedViews.map((view) => view.id),
+        since: 0,
+      });`,
+    `      let duration: { data: { viewId: string; sum_duration: number }[] };
+      try {
+        duration = await getTotalDataroomDuration({
+          dataroomId: dataroomId,
+          excludedLinkIds: [],
+          excludedViewIds: excludedViews.map((view) => view.id),
+          since: 0,
+        });
+      } catch (error) {
+        console.error("Failed to get Tinybird dataroom duration", dataroomId, error);
+        duration = await getStoredDataroomDuration({
+          dataroomId,
+          excludedViewIds: excludedViews.map((view) => view.id),
+        });
+      }`,
+  ],
+]);
+
+// Don't let a Tinybird-dependent visitor detail lookup (browser/OS/geo)
+// 500 the whole visitor row — degrade gracefully instead.
+replaceInFile(
+  "pages/api/teams/[teamId]/datarooms/[id]/views/[viewId]/user-agent.ts",
+  [
+    [
+      `      const userAgent = await getViewUserAgent({
+        viewId: viewId,
+      });
+
+      const userAgentData = userAgent.data[0];
+
+      if (!userAgentData) {
+        return res.status(404).end("No user agent data found");
+      }`,
+      `      let userAgent;
+      try {
+        userAgent = await getViewUserAgent({
+          viewId: viewId,
+        });
+      } catch (error) {
+        console.error("Failed to get Tinybird user agent for view", viewId, error);
+        return res.status(404).end("No user agent data found");
+      }
+
+      const userAgentData = userAgent.data[0];
+
+      if (!userAgentData) {
+        return res.status(404).end("No user agent data found");
+      }`,
+    ],
+  ],
+);
+
+replaceInFile(
+  "pages/api/teams/[teamId]/documents/[id]/views/[viewId]/user-agent.ts",
+  [
+    [
+      `      userAgent = await getViewUserAgent({
+        viewId: viewId,
+      });
+
+      if (!userAgent || userAgent.rows === 0) {
+        userAgent = await getViewUserAgent_v2({
+          documentId: docId,
+          viewId: viewId,
+          since: 0,
+        });
+      }
+
+      const userAgentData = userAgent.data[0];`,
+      `      try {
+        userAgent = await getViewUserAgent({
+          viewId: viewId,
+        });
+
+        if (!userAgent || userAgent.rows === 0) {
+          userAgent = await getViewUserAgent_v2({
+            documentId: docId,
+            viewId: viewId,
+            since: 0,
+          });
+        }
+      } catch (error) {
+        console.error("Failed to get Tinybird user agent for view", viewId, error);
+        return res.status(404).end("No user agent data found");
+      }
+
+      const userAgentData = userAgent.data[0];
+      if (!userAgentData) {
+        return res.status(404).end("No user agent data found");
+      }`,
+    ],
+  ],
+);
+
+// ---------------------------------------------------------------------
+// 3. Download permissions: enabling download for one document via
+//    "Manage Permissions" never touched the link-wide "Allow
+//    downloading" master switch, which the viewer AND-gates against
+//    every per-document grant — so nothing ever appeared downloadable.
+// ---------------------------------------------------------------------
+replaceInFile(
+  "ee/features/permissions/components/dataroom-link-sheet.tsx",
+  [
+    [
+      `  const handlePermissionsSave = async (permissions: ItemPermission | null) => {
+    if (!pendingLinkData) return;
+
+    setIsSaving(true);
+
+    try {
+      // Use the unified function for both new and existing links
+      await createOrUpdateLinkWithPermissions(
+        pendingLinkData,
+        permissions,
+        false,
+        true,
+        true,
+      );`,
+      `  const handlePermissionsSave = async (permissions: ItemPermission | null) => {
+    if (!pendingLinkData) return;
+
+    setIsSaving(true);
+
+    try {
+      // If any item was explicitly granted download access, make sure the
+      // link-level "Allow downloading" switch is on too — otherwise the
+      // per-item grant is silently ignored by the viewer's AND-gate.
+      const anyItemDownloadEnabled =
+        !!permissions &&
+        Object.values(permissions).some((permission) => permission.download);
+      const linkDataToSave = anyItemDownloadEnabled
+        ? { ...pendingLinkData, allowDownload: true }
+        : pendingLinkData;
+
+      // Use the unified function for both new and existing links
+      await createOrUpdateLinkWithPermissions(
+        linkDataToSave,
+        permissions,
+        false,
+        true,
+        true,
+      );`,
+    ],
+  ],
+);
+
+// ---------------------------------------------------------------------
+// 4. Excel viewer: the "advanced" mode iframes Microsoft's public Office
+//    Online viewer, which needs the file in a second publicly-readable
+//    S3 bucket + CDN this deployment never provisions — always falls
+//    back to the self-hosted SheetJS viewer instead (no Microsoft
+//    dependency, no sign-in, no extra infra).
+// ---------------------------------------------------------------------
+replaceInFile("app/api/views/route.ts", [
+  [
+    `    // INFO: for using the advanced excel viewer
+    const { useAdvancedExcelViewer } = data as {
+      useAdvancedExcelViewer: boolean;
+    };`,
+    `    // INFO: for using the advanced excel viewer
+    // Gradien: always use the self-hosted SheetJS viewer instead of the
+    // Microsoft-embed "advanced" viewer — it needs a second public S3
+    // bucket/CDN this deployment doesn't provision.
+    const useAdvancedExcelViewer = false;`,
+  ],
+]);
+
+replaceInFile("app/api/views-dataroom/route.ts", [
+  [
+    `    // INFO: for using the advanced excel viewer
+    let { useAdvancedExcelViewer } = data as {
+      useAdvancedExcelViewer: boolean;
+    };`,
+    `    // INFO: for using the advanced excel viewer
+    // Gradien: always use the self-hosted SheetJS viewer instead of the
+    // Microsoft-embed "advanced" viewer — it needs a second public S3
+    // bucket/CDN this deployment doesn't provision.
+    let useAdvancedExcelViewer = false;`,
+  ],
+  [
+    `        if (documentVersion.type === "sheet") {
+          const document = await prisma.document.findUnique({
+            where: { id: documentId },
+            select: { advancedExcelEnabled: true },
+          });
+          useAdvancedExcelViewer = document?.advancedExcelEnabled ?? false;
+
+          if (useAdvancedExcelViewer) {
+            if (documentVersion.file.includes("https://")) {
+              documentVersion.file = documentVersion.file;
+            } else {
+              // Get team-specific storage config for advanced distribution host
+              const storageConfig = await getTeamStorageConfigById(
+                link.teamId!,
+              );
+              documentVersion.file = \`https://\${storageConfig.advancedDistributionHost}/\${documentVersion.file}\`;
+            }
+          } else {
+            const fileUrl = await getFile({
+              data: documentVersion.file,
+              type: documentVersion.storageType,
+            });
+
+            const data = await parseSheet({ fileUrl });
+            sheetData = data;
+          }
+        }`,
+    `        if (documentVersion.type === "sheet") {
+          useAdvancedExcelViewer = false;
+
+          const fileUrl = await getFile({
+            data: documentVersion.file,
+            type: documentVersion.storageType,
+          });
+
+          const data = await parseSheet({ fileUrl });
+          sheetData = data;
+        }`,
+  ],
+]);
+
+// ---------------------------------------------------------------------
+// 5. Branding: replace Papermark's logo/wordmark with Gradien's
+//    everywhere it appears, in the app and in every transactional email.
+// ---------------------------------------------------------------------
+fs.writeFileSync(
+  "lib/branding.ts",
+  `// Single source of truth for Gradien's brand logo. Update this URL if
+// the uploaded logo in Dataroom Branding settings ever changes, or wire
+// this up to read the team/dataroom brand dynamically.
+export const GRADIEN_LOGO_URL =
+  "${GRADIEN_LOGO_URL}";
+export const GRADIEN_NAME = "Gradien";
+`,
+);
+
+const emailLogoFiles = [
+  "components/emails/dataroom-notification.tsx",
+  "components/emails/dataroom-trial-end.tsx",
+  "components/emails/dataroom-trial-welcome.tsx",
+  "components/emails/dataroom-viewer-invitation.tsx",
+  "components/emails/deleted-domain.tsx",
+  "components/emails/email-updated.tsx",
+  "components/emails/email-verification.tsx",
+  "components/emails/export-ready.tsx",
+  "components/emails/invalid-domain.tsx",
+  "components/emails/onboarding-1.tsx",
+  "components/emails/onboarding-2.tsx",
+  "components/emails/onboarding-3.tsx",
+  "components/emails/onboarding-4.tsx",
+  "components/emails/onboarding-5.tsx",
+  "components/emails/team-invitation.tsx",
+  "components/emails/trial-end-final-reminder.tsx",
+  "components/emails/trial-end-reminder.tsx",
+  "components/emails/upgrade-plan.tsx",
+  "components/emails/verification-email-change.tsx",
+  "components/emails/verification-link.tsx",
+  "components/emails/viewed-dataroom.tsx",
+  "components/emails/viewed-document.tsx",
+  "components/emails/welcome.tsx",
+  "components/emails/year-in-review-papermark.tsx",
+  "ee/features/conversations/emails/components/conversation-notification.tsx",
+  "ee/features/conversations/emails/components/conversation-team-notification.tsx",
+  "ee/features/billing/cancellation/emails/components/pause-resume-reminder.tsx",
+];
+
+for (const filePath of emailLogoFiles) {
+  if (!fs.existsSync(filePath)) continue;
+  let file = fs.readFileSync(filePath, "utf8");
+  if (!file.includes('Papermark</span>')) continue;
+
+  const importSection = file.split('from "@react-email/components"')[0];
+  const needsImg = !/\bImg\b/.test(importSection);
+
+  file = file.replace(
+    '} from "@react-email/components";',
+    `${needsImg ? "  Img,\n" : ""}} from "@react-email/components";\n\nimport { GRADIEN_LOGO_URL } from "@/lib/branding";`,
+  );
+
+  file = file.replace(
+    /<span className="font-bold tracking-tighter">Papermark<\/span>/,
+    `<Img\n                src={GRADIEN_LOGO_URL}\n                alt="Gradien"\n                width="120"\n                height="36"\n                className="mx-auto"\n              />`,
+  );
+
+  fs.writeFileSync(filePath, file);
+}
+
+// otp-verification.tsx already threads a `logo` prop through — just make
+// it always render an image (team-configured logo, else the Gradien
+// default) instead of falling back to plain "Papermark" text.
+replaceInFile("components/emails/otp-verification.tsx", [
+  [
+    `} from "@react-email/components";`,
+    `} from "@react-email/components";\n\nimport { GRADIEN_LOGO_URL } from "@/lib/branding";`,
+  ],
+  [
+    `              {logo ? (
+                <Img
+                  src={logo}
+                  alt="Logo"
+                  width="120"
+                  height="36"
+                  className="mx-auto"
+                />
+              ) : (
+                <Text className="text-2xl font-normal">
+                  <span className="font-bold tracking-tighter">Papermark</span>
+                </Text>
+              )}`,
+    `              <Img
+                src={logo || GRADIEN_LOGO_URL}
+                alt="Gradien"
+                width="120"
+                height="36"
+                className="mx-auto"
+              />`,
+  ],
+]);
+
+// Login / register / verify pages
+replaceInFile("app/(auth)/login/page-client.tsx", [
+  [
+    `            <img
+              src="/_static/papermark-logo.svg"
+              alt="Papermark Logo"
+              className="md:mb-48s -mt-8 mb-36 h-7 w-auto self-start sm:mb-32"
+            />`,
+    `            <img
+              src="${GRADIEN_LOGO_URL}"
+              alt="Gradien Logo"
+              className="md:mb-48s -mt-8 mb-36 h-7 w-auto self-start sm:mb-32"
+            />`,
+  ],
+  [`Welcome to Papermark`, `Welcome to Gradien`],
+]);
+
+replaceInFile("app/(auth)/verify/page.tsx", [
+  [
+    `            <img
+              src="/_static/papermark-logo.svg"
+              alt="Papermark Logo"
+              className="-mt-8 mb-36 h-7 w-auto self-start sm:mb-32 md:mb-48"
+            />`,
+    `            <img
+              src="${GRADIEN_LOGO_URL}"
+              alt="Gradien Logo"
+              className="-mt-8 mb-36 h-7 w-auto self-start sm:mb-32 md:mb-48"
+            />`,
+  ],
+  [
+    `  description: "Verify login to Papermark",
+  title: "Verify | Papermark",`,
+    `  description: "Verify login to Gradien",
+  title: "Verify | Gradien",`,
+  ],
+]);
+
+replaceInFile("app/(auth)/register/page-client.tsx", [
+  [
+    `import PapermarkLogo from "@/public/_static/papermark-logo.svg";`,
+    ``,
+  ],
+  [
+    `import { signIn } from "next-auth/react";`,
+    `import { signIn } from "next-auth/react";
+
+import { GRADIEN_LOGO_URL } from "@/lib/branding";`,
+  ],
+  [
+    `            <Image
+              src={PapermarkLogo}
+              width={119}
+              height={32}
+              alt="Papermark Logo"
+            />`,
+    `            <img
+              src={GRADIEN_LOGO_URL}
+              width={119}
+              height={32}
+              alt="Gradien Logo"
+            />`,
+  ],
+]);
+
+// Dashboard sidebar wordmark
+replaceInFile("components/sidebar/app-sidebar.tsx", [
+  [`<Link href="/dashboard">Papermark</Link>`, `<Link href="/dashboard">Gradien</Link>`],
+]);
+
+// Global page title / OG meta / favicon
+replaceInFile("pages/_app.tsx", [
+  [
+    `<title>Papermark | The Open Source DocSend Alternative</title>`,
+    `<title>Gradien Data Room</title>`,
+  ],
+  [
+    `          content="Papermark | The Open Source DocSend Alternative"`,
+    `          content="Gradien Data Room"`,
+  ],
+  [
+    `        <meta name="twitter:site" content="@papermarkio" />
+        <meta name="twitter:creator" content="@papermarkio" />
+`,
+    ``,
+  ],
+  [
+    `<meta name="twitter:title" content="Papermark" key="tw-title" />`,
+    `<meta name="twitter:title" content="Gradien Data Room" key="tw-title" />`,
+  ],
+  [
+    `          content="https://www.papermark.com"`,
+    `          content="https://dataroom.gradien.ai"`,
+  ],
+  [
+    `<link rel="icon" href="/favicon.ico" key="favicon" />`,
+    `<link rel="icon" href="${GRADIEN_LOGO_URL}" type="image/png" key="favicon" />`,
+  ],
+]);
+replaceAllInFile("pages/_app.tsx", [
+  [
+    `content="Papermark is an open-source document sharing alternative to DocSend with built-in analytics."`,
+    `content="Share and track documents securely with Gradien Data Room."`,
+  ],
+  [
+    `content="https://www.papermark.com/_static/meta-image.png"`,
+    `content="${GRADIEN_LOGO_URL}"`,
+  ],
+]);
+
+// Viewer nav fallback wordmark (document viewer + dataroom viewer)
+replaceInFile("components/view/nav.tsx", [
+  [
+    `import ReportForm from "./report-form";
+
+const getBrandLogoSrc`,
+    `import ReportForm from "./report-form";
+
+import { GRADIEN_LOGO_URL } from "@/lib/branding";
+
+const getBrandLogoSrc`,
+  ],
+  [
+    `              ) : (
+                <Link
+                  href={\`https://www.papermark.com/home?utm_campaign=navbar&utm_medium=navbar&utm_source=papermark-\${linkId}\`}
+                  target="_blank"
+                  className="text-2xl font-bold tracking-tighter text-white"
+                >
+                  Papermark
+                </Link>
+              )}`,
+    `              ) : (
+                <Link
+                  href="https://gradien.ai/?utm_source=dataroom"
+                  target="_blank"
+                  className="flex h-16 w-36 items-center"
+                >
+                  <img
+                    className="h-16 w-36 object-contain"
+                    src={GRADIEN_LOGO_URL}
+                    alt="Gradien"
+                  />
+                </Link>
+              )}`,
+  ],
+]);
+
+replaceInFile("components/view/dataroom/nav-dataroom.tsx", [
+  [
+    `import { formatDate } from "@/lib/utils";`,
+    `import { GRADIEN_LOGO_URL } from "@/lib/branding";
+import { formatDate } from "@/lib/utils";`,
+  ],
+  [
+    `const DEFAULT_BANNER_IMAGE = "/_static/papermark-banner.png";`,
+    `const DEFAULT_BANNER_IMAGE = "${GRADIEN_LOGO_URL}";`,
+  ],
+  [
+    `              ) : (
+                <Link
+                  href={\`https://www.papermark.com/home?utm_campaign=navbar&utm_medium=navbar&utm_source=papermark-\${linkId}\`}
+                  target="_blank"
+                  className="text-2xl font-bold tracking-tighter text-white"
+                >
+                  Papermark
+                </Link>
+              )}`,
+    `              ) : (
+                <Link
+                  href="https://gradien.ai/?utm_source=dataroom"
+                  target="_blank"
+                  className="flex h-16 w-36 items-center"
+                >
+                  <img
+                    className="h-16 w-36 object-contain"
+                    src={GRADIEN_LOGO_URL}
+                    alt="Gradien"
+                  />
+                </Link>
+              )}`,
+  ],
+]);
+
+// Dataroom branding-settings page's default banner constant
+replaceInFile("pages/datarooms/[id]/branding/index.tsx", [
+  [
+    `const DEFAULT_BANNER_IMAGE = "/_static/papermark-banner.png";`,
+    `const DEFAULT_BANNER_IMAGE = "${GRADIEN_LOGO_URL}";`,
+  ],
+]);
 NODE
 
 FROM base AS deps
