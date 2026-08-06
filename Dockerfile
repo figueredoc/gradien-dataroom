@@ -3927,6 +3927,169 @@ replaceInFile("components/emails/upgrade-plan.tsx", [
   ],
 ]);
 
+// =====================================================================
+// Gradien round 4: speed up the Office viewer proxy (skip an extra
+// self-HTTP hop, stream instead of buffering) and switch from
+// Microsoft's stripped-down embed mode to the fuller viewer so more
+// toolbar chrome (incl. formula bar, where Microsoft's anonymous
+// viewer supports it) is shown.
+// =====================================================================
+
+replaceInFile("lib/office-viewer-token.ts", [
+  [
+    `export type OfficeViewerTokenPayload = {
+  file: string;
+  storageType: string;
+  contentType: string;
+};`,
+    `export type OfficeViewerTokenPayload = {
+  file: string;
+  storageType: string;
+  contentType: string;
+  teamId: string;
+};`,
+  ],
+]);
+
+fs.writeFileSync(
+  "pages/api/public/office-viewer/[token].ts",
+  `import type { NextApiRequest, NextApiResponse } from "next";
+import { Readable } from "stream";
+
+import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl as getCloudfrontSignedUrl } from "@aws-sdk/cloudfront-signer";
+import { getSignedUrl as getS3SignedUrl } from "@aws-sdk/s3-request-presigner";
+
+import { getTeamS3ClientAndConfig } from "@/lib/files/aws-client";
+import {
+  OfficeViewerTokenPayload,
+  verifyOfficeViewerToken,
+} from "@/lib/office-viewer-token";
+
+export const config = {
+  api: {
+    responseLimit: false,
+  },
+};
+
+async function resolveFileUrl(payload: OfficeViewerTokenPayload) {
+  if (payload.storageType !== "S3_PATH") {
+    // VERCEL_BLOB (and any other non-S3 storage) already stores a
+    // directly-fetchable URL — no signing needed.
+    return payload.file;
+  }
+
+  const { client, config } = await getTeamS3ClientAndConfig(payload.teamId);
+
+  if (config.distributionHost) {
+    const distributionUrl = new URL(
+      payload.file,
+      \`https://\${config.distributionHost}\`,
+    );
+    return getCloudfrontSignedUrl({
+      url: distributionUrl.toString(),
+      keyPairId: \`\${config.distributionKeyId}\`,
+      privateKey: \`\${config.distributionKeyContents}\`,
+      dateLessThan: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+  }
+
+  const getObjectCommand = new GetObjectCommand({
+    Bucket: config.bucket,
+    Key: payload.file,
+  });
+  return getS3SignedUrl(client, getObjectCommand, { expiresIn: 3600 });
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", ["GET"]);
+    return res.status(405).end("Method Not Allowed");
+  }
+
+  const rawToken = Array.isArray(req.query.token)
+    ? req.query.token[0]
+    : req.query.token;
+  const token = (rawToken || "").replace(/\\.xlsx$/i, "");
+
+  const payload = verifyOfficeViewerToken(token);
+  if (!payload) {
+    return res.status(403).end("Invalid or expired link");
+  }
+
+  try {
+    const signedUrl = await resolveFileUrl(payload);
+    const upstream = await fetch(signedUrl);
+
+    if (!upstream.ok || !upstream.body) {
+      return res.status(502).end("Failed to fetch file");
+    }
+
+    res.setHeader(
+      "Content-Type",
+      payload.contentType ||
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "private, max-age=60");
+    const contentLength = upstream.headers.get("content-length");
+    if (contentLength) {
+      res.setHeader("Content-Length", contentLength);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const stream = Readable.fromWeb(upstream.body as any);
+      stream.on("error", reject);
+      res.on("close", () => stream.destroy());
+      res.on("finish", () => resolve());
+      stream.pipe(res);
+    });
+  } catch (error) {
+    console.error("Failed to proxy office viewer file", error);
+    if (!res.headersSent) {
+      return res.status(500).end("Failed to load file");
+    }
+    res.end();
+  }
+}
+`,
+);
+
+for (const filePath of ["app/api/views/route.ts", "app/api/views-dataroom/route.ts"]) {
+  replaceInFile(filePath, [
+    [
+      `            const officeToken = generateOfficeViewerToken({
+              file: documentVersion.file,
+              storageType: documentVersion.storageType,
+              contentType:
+                documentVersion.contentType ||
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            });`,
+      `            const officeToken = generateOfficeViewerToken({
+              file: documentVersion.file,
+              storageType: documentVersion.storageType,
+              contentType:
+                documentVersion.contentType ||
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              teamId: link.teamId!,
+            });`,
+    ],
+  ]);
+}
+
+// Use Microsoft's fuller "view" mode instead of the stripped-down
+// "embed" mode (which deliberately hides toolbar chrome, including the
+// formula bar, for blog-style iframing) and encode the proxy URL.
+replaceInFile("components/view/viewer/advanced-excel-viewer.tsx", [
+  [
+    `          src={\`https://view.officeapps.live.com/op/embed.aspx?src=\${file}&wdPrint=0&action=embedview&wdAllowInteractivity=False\`}`,
+    `          src={\`https://view.officeapps.live.com/op/view.aspx?src=\${encodeURIComponent(file)}\`}`,
+  ],
+]);
+
 NODE
 
 FROM base AS deps
