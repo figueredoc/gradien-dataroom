@@ -3129,36 +3129,199 @@ replaceInFile(
 
 // ---------------------------------------------------------------------
 // 4. Excel viewer: the "advanced" mode iframes Microsoft's public Office
-//    Online viewer, which needs the file in a second publicly-readable
-//    S3 bucket + CDN this deployment never provisions — always falls
-//    back to the self-hosted SheetJS viewer instead (no Microsoft
-//    dependency, no sign-in, no extra infra).
+//    Online viewer, which needs a URL it can fetch over the public
+//    internet. Instead of provisioning a second publicly-readable S3
+//    bucket + CDN, proxy the file through this app itself via a signed,
+//    short-lived (30 min) token — no new infrastructure, and the file
+//    is never permanently public. The basic self-hosted SheetJS viewer
+//    remains the default for documents that don't have advanced mode
+//    enabled, now with correct number/date/currency formatting.
 // ---------------------------------------------------------------------
+fs.writeFileSync(
+  "lib/office-viewer-token.ts",
+  `import jwt from "jsonwebtoken";
+
+const SECRET = process.env.NEXTAUTH_SECRET as string;
+
+export type OfficeViewerTokenPayload = {
+  file: string;
+  storageType: string;
+  contentType: string;
+};
+
+export function generateOfficeViewerToken(
+  payload: OfficeViewerTokenPayload,
+  expiresInSeconds: number = 60 * 30,
+): string {
+  return jwt.sign(payload, SECRET, { expiresIn: expiresInSeconds });
+}
+
+export function verifyOfficeViewerToken(
+  token: string,
+): OfficeViewerTokenPayload | null {
+  try {
+    return jwt.verify(token, SECRET) as OfficeViewerTokenPayload;
+  } catch {
+    return null;
+  }
+}
+`,
+);
+
+fs.mkdirSync("pages/api/public/office-viewer", { recursive: true });
+fs.writeFileSync(
+  "pages/api/public/office-viewer/[token].ts",
+  `import type { NextApiRequest, NextApiResponse } from "next";
+
+import { getFile } from "@/lib/files/get-file";
+import { verifyOfficeViewerToken } from "@/lib/office-viewer-token";
+
+export const config = {
+  api: {
+    responseLimit: false,
+  },
+};
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", ["GET"]);
+    return res.status(405).end("Method Not Allowed");
+  }
+
+  const rawToken = Array.isArray(req.query.token)
+    ? req.query.token[0]
+    : req.query.token;
+  const token = (rawToken || "").replace(/\\.xlsx$/i, "");
+
+  const payload = verifyOfficeViewerToken(token);
+  if (!payload) {
+    return res.status(403).end("Invalid or expired link");
+  }
+
+  try {
+    const signedUrl = await getFile({
+      data: payload.file,
+      type: payload.storageType as any,
+    });
+    const upstream = await fetch(signedUrl);
+
+    if (!upstream.ok || !upstream.body) {
+      return res.status(502).end("Failed to fetch file");
+    }
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+
+    res.setHeader(
+      "Content-Type",
+      payload.contentType ||
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "private, max-age=60");
+    return res.status(200).send(buffer);
+  } catch (error) {
+    console.error("Failed to proxy office viewer file", error);
+    return res.status(500).end("Failed to load file");
+  }
+}
+`,
+);
+
 replaceInFile("app/api/views/route.ts", [
   [
-    `    // INFO: for using the advanced excel viewer
-    const { useAdvancedExcelViewer } = data as {
-      useAdvancedExcelViewer: boolean;
-    };`,
-    `    // INFO: for using the advanced excel viewer
-    // Gradien: always use the self-hosted SheetJS viewer instead of the
-    // Microsoft-embed "advanced" viewer — it needs a second public S3
-    // bucket/CDN this deployment doesn't provision.
-    const useAdvancedExcelViewer = false;`,
+    `import { getTeamStorageConfigById } from "@/ee/features/storage/config";`,
+    `import { generateOfficeViewerToken } from "@/lib/office-viewer-token";`,
+  ],
+  [
+    `        documentVersion = await prisma.documentVersion.findUnique({
+          where: { id: documentVersionId },
+          select: {
+            file: true,
+            storageType: true,
+            type: true,
+          },
+        });`,
+    `        documentVersion = await prisma.documentVersion.findUnique({
+          where: { id: documentVersionId },
+          select: {
+            file: true,
+            storageType: true,
+            type: true,
+            contentType: true,
+          },
+        });`,
+  ],
+  [
+    `        if (documentVersion.type === "sheet") {
+          if (useAdvancedExcelViewer) {
+            if (!documentVersion.file.includes("https://")) {
+              // Get team-specific storage config for advanced distribution host
+              const storageConfig = await getTeamStorageConfigById(
+                link.teamId!,
+              );
+              documentVersion.file = \`https://\${storageConfig.advancedDistributionHost}/\${documentVersion.file}\`;
+            }
+          } else {
+            const fileUrl = await getFile({
+              data: documentVersion.file,
+              type: documentVersion.storageType,
+            });
+
+            const data = await parseSheet({ fileUrl });
+            sheetData = data;
+          }
+        }`,
+    `        if (documentVersion.type === "sheet") {
+          if (useAdvancedExcelViewer) {
+            const officeToken = generateOfficeViewerToken({
+              file: documentVersion.file,
+              storageType: documentVersion.storageType,
+              contentType:
+                documentVersion.contentType ||
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            });
+            const baseUrl =
+              process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL;
+            documentVersion.file = \`\${baseUrl}/api/public/office-viewer/\${officeToken}\`;
+          } else {
+            const fileUrl = await getFile({
+              data: documentVersion.file,
+              type: documentVersion.storageType,
+            });
+
+            const data = await parseSheet({ fileUrl, raw: false });
+            sheetData = data;
+          }
+        }`,
   ],
 ]);
 
 replaceInFile("app/api/views-dataroom/route.ts", [
   [
-    `    // INFO: for using the advanced excel viewer
-    let { useAdvancedExcelViewer } = data as {
-      useAdvancedExcelViewer: boolean;
-    };`,
-    `    // INFO: for using the advanced excel viewer
-    // Gradien: always use the self-hosted SheetJS viewer instead of the
-    // Microsoft-embed "advanced" viewer — it needs a second public S3
-    // bucket/CDN this deployment doesn't provision.
-    let useAdvancedExcelViewer = false;`,
+    `import { getTeamStorageConfigById } from "@/ee/features/storage/config";`,
+    `import { generateOfficeViewerToken } from "@/lib/office-viewer-token";`,
+  ],
+  [
+    `        documentVersion = await prisma.documentVersion.findUnique({
+          where: { id: documentVersionId },
+          select: {
+            file: true,
+            storageType: true,
+            type: true,
+          },
+        });`,
+    `        documentVersion = await prisma.documentVersion.findUnique({
+          where: { id: documentVersionId },
+          select: {
+            file: true,
+            storageType: true,
+            type: true,
+            contentType: true,
+          },
+        });`,
   ],
   [
     `        if (documentVersion.type === "sheet") {
@@ -3189,16 +3352,63 @@ replaceInFile("app/api/views-dataroom/route.ts", [
           }
         }`,
     `        if (documentVersion.type === "sheet") {
-          useAdvancedExcelViewer = false;
-
-          const fileUrl = await getFile({
-            data: documentVersion.file,
-            type: documentVersion.storageType,
+          const document = await prisma.document.findUnique({
+            where: { id: documentId },
+            select: { advancedExcelEnabled: true },
           });
+          useAdvancedExcelViewer = document?.advancedExcelEnabled ?? false;
 
-          const data = await parseSheet({ fileUrl });
-          sheetData = data;
+          if (useAdvancedExcelViewer) {
+            const officeToken = generateOfficeViewerToken({
+              file: documentVersion.file,
+              storageType: documentVersion.storageType,
+              contentType:
+                documentVersion.contentType ||
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            });
+            const baseUrl =
+              process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL;
+            documentVersion.file = \`\${baseUrl}/api/public/office-viewer/\${officeToken}\`;
+          } else {
+            const fileUrl = await getFile({
+              data: documentVersion.file,
+              type: documentVersion.storageType,
+            });
+
+            const data = await parseSheet({ fileUrl, raw: false });
+            sheetData = data;
+          }
         }`,
+  ],
+]);
+
+replaceInFile("lib/sheet/index.ts", [
+  [
+    `export const parseSheet = async ({ fileUrl }: { fileUrl: string }) => {
+  const response = await fetch(fileUrl);
+  const arrayBuffer = await response.arrayBuffer();
+  const data = new Uint8Array(arrayBuffer);
+  const workbook = XLSX.read(data, { type: "array" });`,
+    `export const parseSheet = async ({
+  fileUrl,
+  raw = true,
+}: {
+  fileUrl: string;
+  raw?: boolean;
+}) => {
+  const response = await fetch(fileUrl);
+  const arrayBuffer = await response.arrayBuffer();
+  const data = new Uint8Array(arrayBuffer);
+  const workbook = XLSX.read(data, { type: "array" });`,
+  ],
+  [
+    `    const json: RowData[] = XLSX.utils.sheet_to_json(worksheet, {
+      header: "A",
+    });`,
+    `    const json: RowData[] = XLSX.utils.sheet_to_json(worksheet, {
+      header: "A",
+      raw,
+    });`,
   ],
 ]);
 
@@ -3490,6 +3700,160 @@ replaceInFile("pages/datarooms/[id]/branding/index.tsx", [
     `const DEFAULT_BANNER_IMAGE = "/_static/papermark-banner.png";`,
     `const DEFAULT_BANNER_IMAGE = "${GRADIEN_LOGO_URL}";`,
   ],
+]);
+
+// ---------------------------------------------------------------------
+// 6. Wording: replace remaining "Papermark" references in email body
+//    copy with Gradien equivalents. Deliberately NOT touched: the
+//    Backtrace Capital customer testimonial and the "bootstrapped
+//    open-source business" paragraph linking to github.com/mfts/papermark
+//    (both are factual third-party claims, not just branding — see PR
+//    notes) and the "book a call" link to marcseitz's personal Calendly
+//    (removed instead of relabeled, since it isn't Gradien's).
+// ---------------------------------------------------------------------
+replaceAllInFile("components/emails/dataroom-notification.tsx", [
+  ["dataroom on Papermark.", "dataroom on Gradien."],
+  [`<Text className="text-sm text-gray-400">Papermark</Text>`, `<Text className="text-sm text-gray-400">Gradien</Text>`],
+  ["Papermark. If you have any feedback or questions about this", "Gradien. If you have any feedback or questions about this"],
+]);
+
+replaceAllInFile("components/emails/dataroom-trial-end.tsx", [
+  ["Your Papermark dataroom trial has expired.", "Your Gradien dataroom trial has expired."],
+]);
+
+replaceAllInFile("components/emails/dataroom-viewer-invitation.tsx", [
+  ["<Preview>View dataroom on Papermark</Preview>", "<Preview>View dataroom on Gradien</Preview>"],
+  [`<span className="font-semibold">Papermark</span>.`, `<span className="font-semibold">Gradien</span>.`],
+  [`<Text className="text-sm text-gray-400">Papermark</Text>`, `<Text className="text-sm text-gray-400">Gradien</Text>`],
+]);
+
+replaceAllInFile("components/emails/deleted-domain.tsx", [
+  ["your Papermark account has been invalid for 30 days. As a result,", "your Gradien account has been invalid for 30 days. As a result,"],
+  ["it has been deleted from Papermark.", "it has been deleted from Gradien."],
+  ["again on Papermark with the link below.", "again on Gradien with the link below."],
+  ["If you did not want to keep using this domain on Papermark anyway,", "If you did not want to keep using this domain on Gradien anyway,"],
+]);
+
+replaceAllInFile("components/emails/email-updated.tsx", [
+  ["The email address for your Papermark account has been changed from", "The email address for your Gradien account has been changed from"],
+]);
+
+replaceAllInFile("components/emails/export-ready.tsx", [
+  ["The export you requested is ready to download for your Papermark", "The export you requested is ready to download for your Gradien"],
+  ["The Papermark Team", "The Gradien Team"],
+  ["Papermark, Inc.", "Gradien Inc."],
+]);
+
+replaceAllInFile("components/emails/invalid-domain.tsx", [
+  ["your Papermark account", "your Gradien account"],
+  ["automatically deleted from Papermark. Please click the link below", "automatically deleted from Gradien. Please click the link below"],
+  ["If you do not want to keep this domain on Papermark, you can", "If you do not want to keep this domain on Gradien, you can"],
+]);
+
+replaceAllInFile("components/emails/onboarding-1.tsx", [
+  ["With Papermark you can upload different kind of documents and turn", "With Gradien you can upload different kind of documents and turn"],
+]);
+replaceAllInFile("components/emails/onboarding-2.tsx", [
+  ["With Papermark you can use different link settings for shared", "With Gradien you can use different link settings for shared"],
+]);
+replaceAllInFile("components/emails/onboarding-3.tsx", [
+  ["With Papermark you can track progress on each page of your", "With Gradien you can track progress on each page of your"],
+]);
+replaceAllInFile("components/emails/onboarding-4.tsx", [
+  ["With Papermark you can:", "With Gradien you can:"],
+  [`Remove &quot;powered by Papermark&quot;`, `Remove &quot;powered by Gradien&quot;`],
+]);
+
+replaceAllInFile("components/emails/onboarding-5.tsx", [
+  ["With Papermark Data Rooms you can:", "With Gradien Data Rooms you can:"],
+  ["All about Papermark", "All about Gradien"],
+  [
+    `            <Text className="text-sm">
+              If you want to self-host Papermark, and build fully customizable
+              experience{" "}
+              <a
+                href="https://cal.com/marcseitz/papermark"
+                className="text-blue-500 underline"
+              >
+                book a call
+              </a>{" "}
+              with us.
+            </Text>`,
+    `            <Text className="text-sm">
+              Want to talk through how to get the most out of Gradien Data
+              Rooms? Reach out any time.
+            </Text>`,
+  ],
+]);
+
+replaceAllInFile("components/emails/team-invitation.tsx", [
+  ["<Preview>Join the team on Papermark</Preview>", "<Preview>Join the team on Gradien</Preview>"],
+  ["{`Join ${teamName} on Papermark`}", "{`Join ${teamName} on Gradien`}"],
+  [`<span className="font-semibold">Papermark</span>.`, `<span className="font-semibold">Gradien</span>.`],
+]);
+
+replaceAllInFile("components/emails/trial-end-final-reminder.tsx", [
+  ["`Upgrade to Papermark Pro`", "`Upgrade to Gradien Pro`"],
+  ["Your Papermark Pro trial expires in 24 hours.", "Your Gradien Pro trial expires in 24 hours."],
+]);
+
+replaceAllInFile("components/emails/trial-end-reminder.tsx", [
+  ["`Upgrade to Papermark Pro`", "`Upgrade to Gradien Pro`"],
+  ["Your Papermark Pro trial is almost over. If you want to continue", "Your Gradien Pro trial is almost over. If you want to continue"],
+  ["Marc from Papermark", "Cesar from Gradien"],
+]);
+
+replaceAllInFile("components/emails/upgrade-plan.tsx", [
+  ["Thanks for upgrading to Papermark {planType}!", "Thanks for upgrading to Gradien {planType}!"],
+  [
+    "My name is Marc, and I&apos;m the founder of Papermark. I wanted\n              to personally reach out to thank you for upgrading to Papermark",
+    "My name is Cesar, and I&apos;m the founder of Gradien. I wanted\n              to personally reach out to thank you for upgrading to Gradien",
+  ],
+  ["Marc from Papermark", "Cesar from Gradien"],
+]);
+
+replaceAllInFile("components/emails/verification-email-change.tsx", [
+  ["Your Papermark Email Change Confirmation Link", "Your Gradien Email Change Confirmation Link"],
+]);
+
+replaceAllInFile("components/emails/verification-link.tsx", [
+  ["<Preview>Login to your Papermark account with a link</Preview>", "<Preview>Login to your Gradien account with a link</Preview>"],
+  ["Your Papermark Login Link", "Your Gradien Login Link"],
+]);
+
+replaceAllInFile("components/emails/dataroom-trial-welcome.tsx", [
+  ["I am Marc, founder of Papermark. Thanks for creating a trial. Do you", "I am Cesar, founder of Gradien. Thanks for creating a trial. Do you"],
+  ["<Text>Marc</Text>", "<Text>Cesar</Text>"],
+]);
+
+replaceAllInFile("components/emails/year-in-review-papermark.tsx", [
+  ["interface PapermarkYearInReviewEmailProps", "interface GradienYearInReviewEmailProps"],
+  ["export default function PapermarkYearInReviewEmail(", "export default function GradienYearInReviewEmail("],
+  ["}: PapermarkYearInReviewEmailProps) {", "}: GradienYearInReviewEmailProps) {"],
+  ["Your Year with Papermark", "Your Year with Gradien"],
+  ["you&apos;ve used Papermark to share your important documents.", "you&apos;ve used Gradien to share your important documents."],
+  ["of sharers on Papermark", "of sharers on Gradien"],
+  ["sharing with Papermark!", "sharing with Gradien!"],
+  ["Happy Holidays from the Papermark team :)", "Happy Holidays from the Gradien team :)"],
+  ["account with Papermark during 2024. If you have any feedback or", "account with Gradien during 2024. If you have any feedback or"],
+  ["%40papermarkio", ""],
+]);
+
+replaceAllInFile("ee/features/conversations/emails/components/conversation-notification.tsx", [
+  ["dataroom <span className=\"font-semibold\">{dataroomName}</span> on\n              Papermark.", "dataroom <span className=\"font-semibold\">{dataroomName}</span> on\n              Gradien."],
+  [`<Text className="text-sm text-gray-400">Papermark</Text>`, `<Text className="text-sm text-gray-400">Gradien</Text>`],
+  ["Papermark, Inc.", "Gradien Inc."],
+  ["Papermark. If you have any feedback or questions about this", "Gradien. If you have any feedback or questions about this"],
+]);
+
+replaceAllInFile("ee/features/conversations/emails/components/conversation-team-notification.tsx", [
+  ["dataroom <span className=\"font-semibold\">{dataroomName}</span> on\n              Papermark.", "dataroom <span className=\"font-semibold\">{dataroomName}</span> on\n              Gradien."],
+  [`<Text className="text-sm text-gray-400">Papermark</Text>`, `<Text className="text-sm text-gray-400">Gradien</Text>`],
+  ["Papermark, Inc.", "Gradien Inc."],
+]);
+
+replaceAllInFile("ee/features/billing/cancellation/emails/components/pause-resume-reminder.tsx", [
+  ["Papermark, Inc.", "Gradien Inc."],
 ]);
 NODE
 
