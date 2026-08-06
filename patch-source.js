@@ -4079,3 +4079,323 @@ replaceInFile("components/view/viewer/advanced-excel-viewer.tsx", [
   ],
 ]);
 
+
+// =====================================================================
+// Gradien round 5: comprehensive "Papermark" -> "Gradien" wording sweep
+// across the whole app (not just email templates), plus fixes for gaps
+// missed in round 2's email sweep, and removing a second real customer
+// testimonial (Jaski / Townhall Network) found during this pass.
+// =====================================================================
+
+// ---- A. Gaps missed in round 2's email sweep ----
+replaceAllInFile("components/emails/welcome.tsx", [
+  [
+    "My name is Marc, and I&apos;m the creator of Papermark – the",
+    "My name is Cesar, and I&apos;m the creator of Gradien – the",
+  ],
+  ["Marc from Papermark", "Cesar from Gradien"],
+  [
+    "You will shortly receive the intro to Papermark. Stay tuned.",
+    "You will shortly receive the intro to Gradien. Stay tuned.",
+  ],
+]);
+
+replaceAllInFile("components/emails/viewed-dataroom.tsx", [
+  [
+    "document page and total duration for this dataroom on Papermark.",
+    "document page and total duration for this dataroom on Gradien.",
+  ],
+  ["Stay informed, stay ahead with Papermark.", "Stay informed, stay ahead with Gradien."],
+]);
+
+replaceAllInFile("components/emails/viewed-document.tsx", [
+  [
+    "page and total duration for this document on Papermark.",
+    "page and total duration for this document on Gradien.",
+  ],
+  ["Stay informed, stay ahead with Papermark.", "Stay informed, stay ahead with Gradien."],
+]);
+
+// Two more transactional emails that round 2 never touched at all.
+const extraEmailLogoFiles = [
+  "ee/features/access-notifications/components/blocked-email-attempt.tsx",
+];
+for (const filePath of extraEmailLogoFiles) {
+  if (!fs.existsSync(filePath)) continue;
+  let file = fs.readFileSync(filePath, "utf8");
+  const importSection = file.split('from "@react-email/components"')[0];
+  const needsImg = !/\bImg\b/.test(importSection);
+  file = file.replace(
+    '} from "@react-email/components";',
+    `${needsImg ? "  Img,\n" : ""}} from "@react-email/components";\n\nimport { GRADIEN_LOGO_URL } from "@/lib/branding";`,
+  );
+  file = file.replace(
+    /<span className="font-bold tracking-tighter">Papermark<\/span>/,
+    `<Img\n                src={GRADIEN_LOGO_URL}\n                alt="Gradien"\n                width="120"\n                height="36"\n                className="mx-auto"\n              />`,
+  );
+  file = file.replaceAll("Papermark, Inc.", "Gradien Inc.");
+  fs.writeFileSync(filePath, file);
+}
+
+// ee/emails/pause-resume-reminder.tsx is dead code (nothing imports it —
+// superseded by ee/features/billing/cancellation/emails/components/
+// pause-resume-reminder.tsx, already fixed) but rename it too for
+// consistency since it's quick and low-risk.
+replaceAllInFile("ee/emails/pause-resume-reminder.tsx", [
+  [
+    `src={\`\${baseUrl}/_static/papermark-logo.png\`}`,
+    `src={GRADIEN_LOGO_URL}`,
+  ],
+  [`alt="Papermark"`, `alt="Gradien"`],
+  ["The Papermark Team", "The Gradien Team"],
+  ["team on Papermark. If you believe this was sent in error, please", "team on Gradien. If you believe this was sent in error, please"],
+  ["Papermark - The secure document sharing platform", "Gradien - The secure document sharing platform"],
+]);
+replaceInFile("ee/emails/pause-resume-reminder.tsx", [
+  [
+    `} from "@react-email/components";`,
+    `} from "@react-email/components";\n\nimport { GRADIEN_LOGO_URL } from "@/lib/branding";`,
+  ],
+]);
+
+// ---- B. "Papermark Assistant" icon + naming ----
+fs.writeFileSync(
+  "components/shared/icons/gradien-sparkle.tsx",
+  fs
+    .readFileSync("components/shared/icons/papermark-sparkle.tsx", "utf8")
+    .replace("export default function PapermarkSparkle(", "export default function GradienSparkle("),
+);
+fs.rmSync("components/shared/icons/papermark-sparkle.tsx");
+
+for (const filePath of [
+  "components/chat/chat-list.tsx",
+  "components/chat/chat-message.tsx",
+  "components/view/nav.tsx",
+  "components/documents/document-header.tsx",
+]) {
+  replaceAllInFile(filePath, [
+    [
+      `import PapermarkSparkle from "../shared/icons/papermark-sparkle";`,
+      `import GradienSparkle from "../shared/icons/gradien-sparkle";`,
+    ],
+    [
+      `import PapermarkSparkle from "@/components/shared/icons/papermark-sparkle";`,
+      `import GradienSparkle from "@/components/shared/icons/gradien-sparkle";`,
+    ],
+    ["<PapermarkSparkle", "<GradienSparkle"],
+    ["Papermark Assistant", "Gradien Assistant"],
+  ]);
+}
+replaceAllInFile("components/chat/chat.tsx", [["Papermark Assistant", "Gradien Assistant"]]);
+replaceAllInFile("components/chat/chat-input.tsx", [["Papermark Assistant", "Gradien Assistant"]]);
+replaceAllInFile("pages/api/assistants/threads/index.ts", [["Papermark Assistant", "Gradien Assistant"]]);
+replaceAllInFile("pages/view/[linkId]/chat.tsx", [["Papermark", "Gradien"]]);
+replaceAllInFile("pages/documents/[id]/chat.tsx", [["Papermark", "Gradien"]]);
+
+// ---- C. Remove the second real customer testimonial (Jaski) ----
+replaceInFile("app/(auth)/verify/invitation/page.tsx", [
+  [
+    `<div className="flex h-full w-full items-center justify-center bg-white md:w-1/2 lg:w-2/5">`,
+    `<div className="flex h-full w-full items-center justify-center bg-white">`,
+  ],
+  [
+    `        {/* Right part */}
+        <div className="hidden h-full w-full justify-center bg-gray-800 md:flex md:w-1/2 lg:w-3/5">
+          <div className="flex w-full max-w-5xl px-4 py-20 md:px-8">
+            <div
+              className="mx-auto flex w-full max-w-5xl justify-center rounded-3xl bg-gray-800 px-4 py-20 md:px-8"
+              id="features"
+            >
+              <div className="flex flex-col items-center justify-center">
+                {/* Image container */}
+                <div className="mb-4 h-64 w-64">
+                  <img
+                    className="h-full w-full rounded-2xl object-cover shadow-2xl"
+                    src="/_static/testimonials/jaski.jpeg"
+                    alt="Jaski"
+                  />
+                </div>
+                {/* Text content */}
+                <div className="max-w-xl text-center">
+                  <blockquote className="text-l text-balance leading-8 text-gray-100 sm:text-xl sm:leading-9">
+                    <p>
+                      True builders listen to their users and build what they
+                      need. Thanks Papermark team for solving a big pain point.
+                      DocSend monopoly will end soon!
+                    </p>
+                  </blockquote>
+                  <figcaption className="mt-4">
+                    <div className="text-balance font-semibold text-white">
+                      Jaski
+                    </div>
+                    <div className="text-balance text-gray-400">
+                      Founder, Townhall Network
+                    </div>
+                  </figcaption>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+`,
+    ``,
+  ],
+]);
+replaceAllInFile("app/(auth)/verify/invitation/page.tsx", [
+  ["Welcome to Papermark", "Welcome to Gradien"],
+  ["Papermark", "Gradien"],
+]);
+
+// ---- D. "Papermark.io" tagline references — drop the ".io", don't
+//         turn it into "Gradien.io" (Gradien's real domain is .ai). ----
+replaceAllInFile("components/domains/domain-configuration.tsx", [
+  ["domain you want to use on Papermark.io", "domain you want to use on Gradien"],
+]);
+replaceAllInFile("lib/middleware/domain.ts", [
+  ["Papermark.io - Document sharing infrastructure for the modern web", "Gradien - Document sharing infrastructure for the modern web"],
+]);
+replaceAllInFile("lib/constants.ts", [
+  ["Papermark.io - Document sharing infrastructure for the modern web", "Gradien - Document sharing infrastructure for the modern web"],
+]);
+replaceAllInFile("ee/stripe/index.ts", [
+  [`name: "Papermark.io"`, `name: "Gradien"`],
+  [`Customer deleted their Papermark instance.`, `Customer deleted their Gradien instance.`],
+]);
+
+replaceAllInFile("components/chat/empty-screen.tsx", [["Papermark", "Gradien"]]);
+// Note: components/welcome/notion-form.tsx has a "sample Notion link"
+// button pointing at Papermark's own real demo Notion page
+// (mfts.notion.site/Papermark-...) — left untouched since it's a real
+// external resource, not just wording; renaming the URL would break it.
+
+// ---- E. App Router root metadata (parallel to pages/_app.tsx, which
+//         only covers the Pages Router half of this hybrid app). ----
+replaceInFile("app/layout.tsx", [
+  [
+    `const data = {
+  description:
+    "Papermark is an open-source document sharing infrastructure. Free alternative to Docsend with custom domain. Manage secure document sharing with real-time analytics.",
+  title: "Papermark | The Open Source DocSend Alternative",
+  url: "/",
+};`,
+    `const data = {
+  description: "Share and track documents securely with Gradien Data Room.",
+  title: "Gradien Data Room",
+  url: "/",
+};`,
+  ],
+  [
+    `metadataBase: new URL("https://www.papermark.com"),`,
+    `metadataBase: new URL(
+      process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "https://dataroom.gradien.ai",
+    ),`,
+  ],
+  [`siteName: "Papermark",`, `siteName: "Gradien",`],
+]);
+
+// lib/utils.ts's constructMetadata has a default og-image URL and a
+// hardcoded Twitter handle that a blanket rename would mangle into a
+// broken/wrong domain instead of just removing.
+replaceInFile("lib/utils.ts", [
+  [
+    `export function constructMetadata({
+  title = "Papermark | The Open Source DocSend Alternative",
+  description = "Papermark is an open-source document sharing alternative to DocSend with built-in engagement analytics and 100% white-labeling.",
+  image = "https://www.papermark.com/_static/meta-image.png",
+  favicon = "/favicon.ico",
+  noIndex = false,
+}: {`,
+    `export function constructMetadata({
+  title = "Gradien Data Room",
+  description = "Share and track documents securely with Gradien Data Room.",
+  image = "${GRADIEN_LOGO_URL}",
+  favicon = "/favicon.ico",
+  noIndex = false,
+}: {`,
+  ],
+  [
+    `    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [image],
+      creator: "@papermarkio",
+    },`,
+    `    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [image],
+    },`,
+  ],
+]);
+
+// ---- F. Broad blanket rename across the rest of the app. Each of
+//         these files was checked individually — none contain a real
+//         third-party quote/testimonial or a functional string match
+//         against "Papermark" (case-sensitive; lowercase "papermark.com"
+//         URL matching, e.g. in agreements/download.ts, is untouched). ----
+const blanketPapermarkFiles = [
+  "components/datarooms/dataroom-trial-modal.tsx",
+  "components/billing/upgrade-plan-modal.tsx",
+  "components/billing/pro-banner.tsx",
+  "components/billing/upgrade-plan-modal-old.tsx",
+  "components/billing/pro-annual-banner.tsx",
+  "components/links/link-sheet/pro-banner-section.tsx",
+  "components/links/link-sheet/og-section.tsx",
+  "components/welcome/next.tsx",
+  "components/welcome/intro.tsx",
+  "components/welcome/dataroom-trial.tsx",
+  "components/welcome/dataroom.tsx",
+  "components/welcome/select.tsx",
+  "pages/datarooms/[id]/settings/index.tsx",
+  "pages/datarooms/[id]/groups/[groupId]/index.tsx",
+  "pages/account/general.tsx",
+  "pages/settings/tokens.tsx",
+  "pages/settings/general.tsx",
+  "pages/settings/incoming-webhooks.tsx",
+  "pages/settings/upgrade.tsx",
+  "pages/settings/webhooks/index.tsx",
+  "pages/room_ppreview_demo.tsx",
+  "pages/nav_ppreview_demo.tsx",
+  "pages/branding.tsx",
+  "pages/api/teams/[teamId]/agreements/[agreementId]/download.ts",
+  "app/api/og/route.tsx",
+  "app/api/og/yir/route.tsx",
+  "app/(auth)/auth/confirm-email-change/[token]/page.tsx",
+  "app/(auth)/register/page.tsx",
+  "app/(auth)/login/page.tsx",
+  "app/(auth)/login/page-client.tsx",
+  "app/(auth)/verify/page.tsx",
+  "app/(auth)/verify/invitation/InvitationStatusContent.tsx",
+  "ee/features/billing/cancellation/components/feedback-modal.tsx",
+  "ee/features/billing/cancellation/components/reason-base-modal.tsx",
+  "ee/features/billing/cancellation/emails/lib/send-email-pause-resume-reminder.ts",
+  "ee/stripe/constants.ts",
+  "lib/webhook/send-webhooks.ts",
+  "lib/emails/send-mail-verification.ts",
+  "lib/emails/send-welcome.ts",
+  "lib/emails/send-verification-request.ts",
+  "lib/emails/send-upgrade-plan.ts",
+  "lib/emails/send-onboarding.ts",
+  "lib/zod/schemas/webhooks.ts",
+  "lib/year-in-review/send-emails.ts",
+  "components/view/visitor-graph.tsx",
+];
+for (const filePath of blanketPapermarkFiles) {
+  replaceAllInFile(filePath, [["Papermark", "Gradien"]]);
+}
+
+// "Powered by Papermark" page titles/meta shown to every visitor of a
+// shared document/dataroom link — high-visibility, worth calling out.
+for (const filePath of [
+  "pages/view/[linkId]/d/[documentId].tsx",
+  "pages/view/[linkId]/index.tsx",
+  "pages/view/domains/[domain]/[slug]/d/[documentId].tsx",
+  "pages/view/domains/[domain]/[slug]/index.tsx",
+]) {
+  replaceAllInFile(filePath, [
+    ["Powered by Papermark", "Powered by Gradien"],
+    ["powered by Papermark", "powered by Gradien"],
+  ]);
+}
