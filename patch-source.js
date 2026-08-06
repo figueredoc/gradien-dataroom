@@ -4399,3 +4399,184 @@ for (const filePath of [
     ["powered by Papermark", "powered by Gradien"],
   ]);
 }
+
+// =====================================================================
+// Gradien round 6: the Office viewer's toolbar was showing the app's
+// raw hostname as the "file name" (Microsoft's viewer infers a name
+// from the URL, and our proxy URL had no filename-looking segment) —
+// leaks internal infrastructure to anyone viewing a shared Excel file.
+// Give the proxy URL a real, sanitized filename segment instead.
+// =====================================================================
+
+fs.rmSync("pages/api/public/office-viewer/[token].ts", { force: true });
+fs.mkdirSync("pages/api/public/office-viewer/[token]", { recursive: true });
+fs.writeFileSync(
+  "pages/api/public/office-viewer/[token]/[filename].ts",
+  `import type { NextApiRequest, NextApiResponse } from "next";
+import { Readable } from "stream";
+
+import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl as getCloudfrontSignedUrl } from "@aws-sdk/cloudfront-signer";
+import { getSignedUrl as getS3SignedUrl } from "@aws-sdk/s3-request-presigner";
+
+import { getTeamS3ClientAndConfig } from "@/lib/files/aws-client";
+import {
+  OfficeViewerTokenPayload,
+  verifyOfficeViewerToken,
+} from "@/lib/office-viewer-token";
+
+export const config = {
+  api: {
+    responseLimit: false,
+  },
+};
+
+async function resolveFileUrl(payload: OfficeViewerTokenPayload) {
+  if (payload.storageType !== "S3_PATH") {
+    // VERCEL_BLOB (and any other non-S3 storage) already stores a
+    // directly-fetchable URL — no signing needed.
+    return payload.file;
+  }
+
+  const { client, config } = await getTeamS3ClientAndConfig(payload.teamId);
+
+  if (config.distributionHost) {
+    const distributionUrl = new URL(
+      payload.file,
+      \`https://\${config.distributionHost}\`,
+    );
+    return getCloudfrontSignedUrl({
+      url: distributionUrl.toString(),
+      keyPairId: \`\${config.distributionKeyId}\`,
+      privateKey: \`\${config.distributionKeyContents}\`,
+      dateLessThan: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+  }
+
+  const getObjectCommand = new GetObjectCommand({
+    Bucket: config.bucket,
+    Key: payload.file,
+  });
+  return getS3SignedUrl(client, getObjectCommand, { expiresIn: 3600 });
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", ["GET"]);
+    return res.status(405).end("Method Not Allowed");
+  }
+
+  // [filename] exists only so Microsoft's viewer infers a friendly file
+  // name from the URL instead of falling back to showing our hostname —
+  // it's not used to look anything up, the token carries everything.
+  const rawToken = Array.isArray(req.query.token)
+    ? req.query.token[0]
+    : req.query.token;
+
+  const payload = verifyOfficeViewerToken(rawToken || "");
+  if (!payload) {
+    return res.status(403).end("Invalid or expired link");
+  }
+
+  try {
+    const signedUrl = await resolveFileUrl(payload);
+    const upstream = await fetch(signedUrl);
+
+    if (!upstream.ok || !upstream.body) {
+      return res.status(502).end("Failed to fetch file");
+    }
+
+    res.setHeader(
+      "Content-Type",
+      payload.contentType ||
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "private, max-age=60");
+    const contentLength = upstream.headers.get("content-length");
+    if (contentLength) {
+      res.setHeader("Content-Length", contentLength);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const stream = Readable.fromWeb(upstream.body as any);
+      stream.on("error", reject);
+      res.on("close", () => stream.destroy());
+      res.on("finish", () => resolve());
+      stream.pipe(res);
+    });
+  } catch (error) {
+    console.error("Failed to proxy office viewer file", error);
+    if (!res.headersSent) {
+      return res.status(500).end("Failed to load file");
+    }
+    res.end();
+  }
+}
+`,
+);
+
+fs.writeFileSync(
+  "lib/office-viewer-token.ts",
+  `import jwt from "jsonwebtoken";
+
+const SECRET = process.env.NEXTAUTH_SECRET as string;
+
+export type OfficeViewerTokenPayload = {
+  file: string;
+  storageType: string;
+  contentType: string;
+  teamId: string;
+};
+
+export function generateOfficeViewerToken(
+  payload: OfficeViewerTokenPayload,
+  expiresInSeconds: number = 60 * 30,
+): string {
+  return jwt.sign(payload, SECRET, { expiresIn: expiresInSeconds });
+}
+
+export function verifyOfficeViewerToken(
+  token: string,
+): OfficeViewerTokenPayload | null {
+  try {
+    return jwt.verify(token, SECRET) as OfficeViewerTokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+// Turns an arbitrary document name into a safe URL path segment ending
+// in .xlsx, so Microsoft's Office Online viewer displays it as the file
+// name instead of falling back to showing our hostname.
+export function sanitizeOfficeViewerFilename(name: string | null | undefined): string {
+  const base = (name || "document")
+    .replace(/\\.[a-z0-9]+$/i, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 100);
+  return \`\${base || "document"}.xlsx\`;
+}
+`,
+);
+
+for (const filePath of ["app/api/views/route.ts", "app/api/views-dataroom/route.ts"]) {
+  replaceInFile(filePath, [
+    [
+      `import { generateOfficeViewerToken } from "@/lib/office-viewer-token";`,
+      `import {\n  generateOfficeViewerToken,\n  sanitizeOfficeViewerFilename,\n} from "@/lib/office-viewer-token";`,
+    ],
+    [
+      `            const baseUrl =
+              process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL;
+            documentVersion.file = \`\${baseUrl}/api/public/office-viewer/\${officeToken}\`;`,
+      `            const baseUrl =
+              process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL;
+            const officeFilename = sanitizeOfficeViewerFilename(documentName);
+            documentVersion.file = \`\${baseUrl}/api/public/office-viewer/\${officeToken}/\${officeFilename}\`;`,
+    ],
+  ]);
+}
